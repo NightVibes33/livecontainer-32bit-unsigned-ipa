@@ -29,6 +29,41 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Checkout LiveExec32
+        uses: actions/checkout@v6
+        with:
+          repository: LiveContainer/LiveExec32
+          path: build/LiveExec32
+
+      - name: Prepare Theos
+        run: |
+          set -eu
+          brew install ldid
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Build bundled LiveExec32
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          set -euxo pipefail
+          make -C build/LiveExec32 clean
+          make -C build/LiveExec32
+          LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name 'LiveExec32.app' -print -quit)
+          if [ -z "$LIVEEXEC_APP" ]; then
+            echo "LiveExec32.app was not produced" >&2
+            find build/LiveExec32/.theos -maxdepth 5 -print >&2 || true
+            exit 1
+          fi
+          if [ -f build/LiveExec32/lib/libdynarmic.dylib ]; then
+            cp build/LiveExec32/lib/libdynarmic.dylib "$LIVEEXEC_APP/"
+            install_name_tool -id '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/libdynarmic.dylib" || true
+            install_name_tool -change libdynarmic.dylib '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+            install_name_tool -change '@rpath/libdynarmic.dylib' '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+          fi
+          test -f "$LIVEEXEC_APP/Info.plist"
+          test -f "$LIVEEXEC_APP/LiveExec32"
+          echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+
       - name: Build app without signing
         run: |
           set -o pipefail
@@ -54,6 +89,12 @@ jobs:
             find "$DERIVED_DATA/Build/Products" -maxdepth 4 -print >&2
             exit 1
           fi
+          test -n "${LIVEEXEC_APP:-}"
+          test -d "$LIVEEXEC_APP"
+          rm -rf "$APP_PATH/LiveExec32.app"
+          ditto "$LIVEEXEC_APP" "$APP_PATH/LiveExec32.app"
+          test -f "$APP_PATH/LiveExec32.app/Info.plist"
+          test -f "$APP_PATH/LiveExec32.app/LiveExec32"
           tools/package-unsigned-ipa.sh "$APP_PATH" "$OUTPUT_IPA"
 
       - name: Verify unsigned IPA
@@ -63,6 +104,9 @@ jobs:
           unzip -q "$OUTPUT_IPA" -d ipa-check
           test -d ipa-check/Payload/LiveContainer.app
           test -f ipa-check/Payload/LiveContainer.app/Info.plist
+          test -d ipa-check/Payload/LiveContainer.app/LiveExec32.app
+          test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/Info.plist
+          test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/LiveExec32
           test ! -e ipa-check/Payload/LiveContainer.app/embedded.mobileprovision
           if find ipa-check/Payload -type d -name _CodeSignature | grep -q .; then
             echo "unexpected _CodeSignature directory in unsigned IPA" >&2
@@ -88,6 +132,6 @@ jobs:
           gh release create unsigned-latest "$OUTPUT_IPA" \
             --target "$GITHUB_SHA" \
             --title "Latest unsigned IPA" \
-            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import." \
+            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes bundled LiveExec32.app." \
             --prerelease \
             --latest

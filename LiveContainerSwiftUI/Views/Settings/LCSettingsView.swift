@@ -367,9 +367,9 @@ struct LCSettingsView: View {
                         .disabled(NSClassFromString("FLEXManager") == nil)
                         #if is32BitSupported
                         HStack {
-                            Text("LiveExec32 .app path")
+                            Text("Custom LiveExec32 .app path")
                             Spacer()
-                            TextField("LiveExec32.app", text: $liveExec32Path)
+                            TextField("Bundled default", text: $liveExec32Path)
                                 .multilineTextAlignment(.trailing)
                         }
                         #endif
