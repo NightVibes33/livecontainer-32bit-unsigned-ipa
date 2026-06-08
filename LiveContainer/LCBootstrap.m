@@ -332,13 +332,13 @@ bool overwriteExecPath(const char *newExecPath) {
 
 static void *getAppEntryPoint(void *handle) {
     (void)handle;
-    uint32_t entryoff = 0;
+    uint64_t entryoff = 0;
     const struct mach_header_64 *header = (struct mach_header_64 *)getGuestAppHeader();
     if(!header) {
         NSLog(@"[LCBootstrap] Guest app image header was not found");
         return NULL;
     }
-    if(header->magic != MH_MAGIC_64 && header->magic != MH_MAGIC_64_CIGAM) {
+    if(header->magic != MH_MAGIC_64 && header->magic != MH_CIGAM_64) {
         NSLog(@"[LCBootstrap] Guest app image header is not a 64-bit Mach-O: 0x%x", header->magic);
         return NULL;
     }
