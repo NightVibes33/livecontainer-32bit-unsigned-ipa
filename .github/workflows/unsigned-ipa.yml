@@ -134,5 +134,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Latest unsigned IPA" \
             --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes bundled LiveExec32.app." \
-            --prerelease \
             --latest
