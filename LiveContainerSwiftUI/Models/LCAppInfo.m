@@ -356,7 +356,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         return;
     }
 #else
-    self.is32Bit = is32bit;
+    self.is32bit = is32bit;
 #endif
 
     if (!LCSharedUtils.certificatePassword || is32bit || self.dontSign) {
