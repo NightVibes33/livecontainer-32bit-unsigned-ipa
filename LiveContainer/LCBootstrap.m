@@ -179,15 +179,21 @@ static BOOL checkJITEnabled() {
         return YES;
     }
     
-    if(@available(iOS 26.0 ,*))  {
-        return false;
-    }
-
     // check csflags
-    int flags;
+    int flags = 0;
     csops(getpid(), 0, &flags, sizeof(flags));
     return (flags & CS_DEBUGGED) != 0;
 #endif
+}
+
+static BOOL waitForJITEnabled(int attempts, useconds_t delay) {
+    for(int i = 0; i < attempts; i++) {
+        if(checkJITEnabled()) {
+            return YES;
+        }
+        usleep(delay);
+    }
+    return checkJITEnabled();
 }
 
 static uint64_t rnd64(uint64_t v, uint64_t r) {
@@ -590,6 +596,12 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         is32bit = true;
     }
     if(is32bit) {
+        if (!isJitEnabled) {
+            isJitEnabled = waitForJITEnabled(80, 1000 * 100);
+            if(isJitEnabled) {
+                init_bypassDyldLibValidation();
+            }
+        }
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps through LiveExec32.";
         }
