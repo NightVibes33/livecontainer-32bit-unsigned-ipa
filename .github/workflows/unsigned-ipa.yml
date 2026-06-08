@@ -88,7 +88,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported'
 
       - name: Package unsigned IPA
         run: |
@@ -175,6 +177,10 @@ jobs:
           codesign -d --entitlements :- ipa-check/Payload/LiveContainer.app > ipa-check-entitlements.plist
           grep -q 'group.com.SideStore.SideStore' ipa-check-entitlements.plist
           grep -q 'group.com.rileytestut.AltStore' ipa-check-entitlements.plist
+          if ! grep -R -a -q 'Rerouting 32-bit guest dlopen' ipa-check/Payload/LiveContainer.app; then
+            echo "missing ARMv7 dlopen reroute marker in packaged IPA" >&2
+            exit 1
+          fi
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' ipa-check/Payload/LiveContainer.app/Info.plist
