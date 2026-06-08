@@ -46,7 +46,7 @@ jobs:
           THEOS: ${{ runner.temp }}/theos
         run: |
           set -euxo pipefail
-          perl -0pi -e 's/LiveExec32_CFLAGS = /LiveExec32_CFLAGS = -std=c++17 /' build/LiveExec32/Makefile
+          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' build/LiveExec32/Makefile
           make -C build/LiveExec32 clean
           make -C build/LiveExec32
           LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name 'LiveExec32.app' -print -quit)
