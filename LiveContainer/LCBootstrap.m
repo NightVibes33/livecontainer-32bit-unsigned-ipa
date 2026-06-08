@@ -19,6 +19,7 @@
 #include <mach-o/ldsyms.h>
 
 static int (*appMain)(int, char**);
+static bool lcExecPathOverwriteSucceeded = false;
 NSUserDefaults *lcUserDefaults;
 NSUserDefaults *lcSharedDefaults;
 NSString *lcAppGroupPath;
@@ -201,11 +202,11 @@ static uint64_t rnd64(uint64_t v, uint64_t r) {
     return (v + r) & ~r;
 }
 
-void overwriteMainCFBundle(void) {
+bool overwriteMainCFBundle(void) {
     // Overwrite CFBundleGetMainBundle
     uint32_t *pc = (uint32_t *)CFBundleGetMainBundle;
     void **mainBundleAddr = 0;
-    while (true) {
+    for (int i = 0; i < 128; ++i) {
         uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
         if (addr) {
             // adrp <- pc-1
@@ -217,18 +218,23 @@ void overwriteMainCFBundle(void) {
         }
         ++pc;
     }
-    assert(mainBundleAddr != NULL);
+    if(!mainBundleAddr) {
+        NSLog(@"[LCBootstrap] CFBundleGetMainBundle layout changed; skipping main CFBundle overwrite");
+        return false;
+    }
     *mainBundleAddr = (__bridge void *)NSBundle.mainBundle._cfBundle;
+    return true;
 }
 
-void overwriteMainNSBundle(NSBundle *newBundle) {
+bool overwriteMainNSBundle(NSBundle *newBundle) {
     // Overwrite NSBundle.mainBundle
     // iOS 16: x19 is _MergedGlobals
     // iOS 17: x19 is _MergedGlobals+4
 
     NSString *oldPath = NSBundle.mainBundle.executablePath;
+    BOOL replacedMainBundle = NO;
     uint32_t *mainBundleImpl = (uint32_t *)method_getImplementation(class_getClassMethod(NSBundle.class, @selector(mainBundle)));
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 20 && !replacedMainBundle; i++) {
         void **_MergedGlobals = (void **)aarch64_emulate_adrp_add(mainBundleImpl[i], mainBundleImpl[i+1], (uint64_t)&mainBundleImpl[i]);
         if (!_MergedGlobals) continue;
 
@@ -241,55 +247,101 @@ void overwriteMainNSBundle(NSBundle *newBundle) {
         for (int mgIdx = 0; mgIdx < 20; mgIdx++) {
             if (_MergedGlobals[mgIdx] == (__bridge void *)NSBundle.mainBundle) {
                 _MergedGlobals[mgIdx] = (__bridge void *)newBundle;
+                replacedMainBundle = YES;
                 break;
             }
         }
     }
 
-    assert(![NSBundle.mainBundle.executablePath isEqualToString:oldPath]);
+    if(![NSBundle.mainBundle.executablePath isEqualToString:oldPath]) {
+        return true;
+    }
+    NSLog(@"[LCBootstrap] NSBundle.mainBundle layout changed; skipping main NSBundle overwrite");
+    return false;
 }
 
 int hook__NSGetExecutablePath_overwriteExecPath(char*** dyldApiInstancePtr, char* newPath, uint32_t* bufsize) {
-    assert(dyldApiInstancePtr != 0);
+    lcExecPathOverwriteSucceeded = false;
+    if(!dyldApiInstancePtr) {
+        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook missing dyld API instance");
+        return 0;
+    }
     char** dyldConfig = dyldApiInstancePtr[1];
-    assert(dyldConfig != 0);
+    if(!dyldConfig) {
+        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook missing dyld config");
+        return 0;
+    }
     
     char** mainExecutablePathPtr = 0;
-    // mainExecutablePath is at 0x10 for iOS 15~18.3.2, 0x20 for iOS 18.4+
-    if(dyldConfig[2] != 0 && dyldConfig[2][0] == '/') {
-        mainExecutablePathPtr = dyldConfig + 2;
-    } else if (dyldConfig[4] != 0 && dyldConfig[4][0] == '/') {
-        mainExecutablePathPtr = dyldConfig + 4;
-    } else {
-        assert(mainExecutablePathPtr != 0);
+    // mainExecutablePath was at 0x10 for iOS 15~18.3.2 and 0x20 for iOS 18.4+.
+    // Newer dyld builds can move it again, so scan nearby config slots.
+    const int candidateIndexes[] = {2, 4, 0, 1, 3, 5, 6, 7, 8, 9, 10, 11};
+    for(size_t i = 0; i < sizeof(candidateIndexes) / sizeof(candidateIndexes[0]); ++i) {
+        int idx = candidateIndexes[i];
+        if(dyldConfig[idx] != 0 && dyldConfig[idx][0] == '/') {
+            mainExecutablePathPtr = dyldConfig + idx;
+            break;
+        }
+    }
+    if(!mainExecutablePathPtr) {
+        NSLog(@"[LCBootstrap] _NSGetExecutablePath dyld config layout changed; executable path slot not found");
+        return 0;
     }
 
-    kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)mainExecutablePathPtr, sizeof(mainExecutablePathPtr), false, PROT_READ | PROT_WRITE);
+    kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)mainExecutablePathPtr, sizeof(*mainExecutablePathPtr), false, PROT_READ | PROT_WRITE);
     if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+        if(!os_tpro_is_supported()) {
+            NSLog(@"[LCBootstrap] _NSGetExecutablePath path overwrite vm_protect failed: %d", ret);
+            return 0;
+        }
         os_thread_self_restrict_tpro_to_rw();
     }
     *mainExecutablePathPtr = newPath;
-    if(ret != KERN_SUCCESS) {
+    lcExecPathOverwriteSucceeded = true;
+    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
         os_thread_self_restrict_tpro_to_ro();
     }
 
     return 0;
 }
 
-void overwriteExecPath(const char *newExecPath) {
+bool overwriteExecPath(const char *newExecPath) {
     // dyld4 stores executable path in a different place (iOS 15.0 +)
     // https://github.com/apple-oss-distributions/dyld/blob/ce1cc2088ef390df1c48a1648075bbd51c5bbc6a/dyld/DyldAPIs.cpp#L802
-    int (*orig__NSGetExecutablePath)(void* dyldPtr, char* buf, uint32_t* bufsize);
-    performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, hook__NSGetExecutablePath_overwriteExecPath);
+    int (*orig__NSGetExecutablePath)(void* dyldPtr, char* buf, uint32_t* bufsize) = 0;
+    lcExecPathOverwriteSucceeded = false;
+    if(!performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, hook__NSGetExecutablePath_overwriteExecPath)) {
+        NSLog(@"[LCBootstrap] Unable to hook _NSGetExecutablePath; continuing without dyld executable path overwrite");
+        return false;
+    }
     _NSGetExecutablePath((char*)newExecPath, NULL);
+    bool overwritten = lcExecPathOverwriteSucceeded;
     // put the original function back
-    performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, orig__NSGetExecutablePath);
+    if(orig__NSGetExecutablePath) {
+        if(!performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, orig__NSGetExecutablePath)) {
+            NSLog(@"[LCBootstrap] Failed to restore _NSGetExecutablePath hook");
+        }
+    } else {
+        NSLog(@"[LCBootstrap] Original _NSGetExecutablePath pointer was not captured");
+    }
+    if(!overwritten) {
+        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook did not overwrite executable path");
+    }
+    return overwritten;
 }
 
 static void *getAppEntryPoint(void *handle) {
+    (void)handle;
     uint32_t entryoff = 0;
     const struct mach_header_64 *header = (struct mach_header_64 *)getGuestAppHeader();
+    if(!header) {
+        NSLog(@"[LCBootstrap] Guest app image header was not found");
+        return NULL;
+    }
+    if(header->magic != MH_MAGIC_64 && header->magic != MH_MAGIC_64_CIGAM) {
+        NSLog(@"[LCBootstrap] Guest app image header is not a 64-bit Mach-O: 0x%x", header->magic);
+        return NULL;
+    }
     uint8_t *imageHeaderPtr = (uint8_t*)header + sizeof(struct mach_header_64);
     struct load_command *command = (struct load_command *)imageHeaderPtr;
     for(int i = 0; i < header->ncmds; ++i) {
@@ -301,7 +353,10 @@ static void *getAppEntryPoint(void *handle) {
         imageHeaderPtr += command->cmdsize;
         command = (struct load_command *)imageHeaderPtr;
     }
-    assert(entryoff > 0);
+    if(entryoff == 0) {
+        NSLog(@"[LCBootstrap] Guest app LC_MAIN entry point was not found");
+        return NULL;
+    }
     return (void *)header + entryoff;
 }
 
@@ -434,7 +489,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     // Overwrite @executable_path
     const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
     *path = appExecPath;
-    overwriteExecPath(appExecPath);
+    if(!overwriteExecPath(appExecPath)) {
+        NSLog(@"[LCBootstrap] Continuing after executable path overwrite fallback");
+    }
     
     // Overwrite NSUserDefaults
     if([guestAppInfo[@"doUseLCBundleId"] boolValue]) {
@@ -544,10 +601,14 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     [LCSharedUtils setContainerUsingByLC:lcAppUrlScheme folderName:dataUUID auditToken:0];
 
     // Overwrite NSBundle
-    overwriteMainNSBundle(appBundle);
+    if(!overwriteMainNSBundle(appBundle)) {
+        NSLog(@"[LCBootstrap] Continuing after NSBundle.mainBundle overwrite fallback");
+    }
 
     // Overwrite CFBundle
-    overwriteMainCFBundle();
+    if(!overwriteMainCFBundle()) {
+        NSLog(@"[LCBootstrap] Continuing after CFBundleGetMainBundle overwrite fallback");
+    }
 
     // Overwrite executable info
     if(!appBundle.executablePath) {
@@ -910,7 +971,13 @@ int LiveContainerMain(int argc, char *argv[]) {
     }
     
     void *LiveContainerSwiftUIHandle = dlopen("@executable_path/Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI", RTLD_LAZY);
-    assert(LiveContainerSwiftUIHandle);
+    if(!LiveContainerSwiftUIHandle) {
+        const char *dlerr = dlerror();
+        NSString *error = [NSString stringWithFormat:@"Failed to load LiveContainerSwiftUI.framework: %s", dlerr ?: "unknown dlopen error"];
+        NSLog(@"[LCBootstrap] %@", error);
+        [lcUserDefaults setObject:error forKey:@"error"];
+        return 1;
+    }
     
     if(sideStoreExist) {
         void* sideStoreHandle = dlopen("@executable_path/Frameworks/SideStore.framework/SideStore", RTLD_LAZY);
@@ -930,6 +997,13 @@ int LiveContainerMain(int argc, char *argv[]) {
     }
 
     int (*LiveContainerSwiftUIMain)(void) = dlsym(LiveContainerSwiftUIHandle, "main");
+    if(!LiveContainerSwiftUIMain) {
+        const char *dlerr = dlerror();
+        NSString *error = [NSString stringWithFormat:@"Failed to resolve LiveContainerSwiftUI main: %s", dlerr ?: "unknown dlsym error"];
+        NSLog(@"[LCBootstrap] %@", error);
+        [lcUserDefaults setObject:error forKey:@"error"];
+        return 1;
+    }
     return LiveContainerSwiftUIMain();
 
 }

@@ -189,10 +189,122 @@ uint32_t hook_dyld_get_program_sdk_version(void* dyldApiInstancePtr) {
 }
 
 
+static bool LCIsAdrp(uint32_t instruction) {
+    return (instruction & 0x9f000000) == 0x90000000;
+}
+
+static bool LCIsArm64eMovImmediate(uint32_t instruction) {
+    return (instruction & 0x7F800000) == 0x52800000;
+}
+
+static bool LCIsArm64eLdrPreIndex64(uint32_t instruction) {
+    return (instruction & 0xFFE00C00) == 0xF8400C00;
+}
+
+static bool LCIsLdrUnsignedImmediate(uint32_t instruction) {
+    return (instruction & 0xBFC00000) == 0xB9400000;
+}
+
+static bool LCIsReasonableDyldVtableOffset(uintptr_t offset) {
+    return offset >= sizeof(void*) && offset < 0x4000 && (offset % sizeof(void*)) == 0;
+}
+
+static bool LCFindDyldApiVtableOffset(uint32_t* baseAddr, uint32_t adrpOffset, uintptr_t* vtableOffset) {
+    for(uint32_t offset = adrpOffset + 3; offset < adrpOffset + 20; ++offset) {
+        uint32_t instruction = baseAddr[offset];
+        if(LCIsArm64eMovImmediate(instruction)) {
+            uintptr_t imm16 = (instruction & 0x1FFFE0) >> 5;
+            if(LCIsReasonableDyldVtableOffset(imm16)) {
+                *vtableOffset = imm16;
+                return true;
+            }
+        }
+
+        if(LCIsArm64eLdrPreIndex64(instruction)) {
+            int32_t imm9 = (instruction & 0x1FF000) >> 12;
+            if(imm9 & 0x100) {
+                imm9 |= ~0x1FF;
+            }
+            if(imm9 > 0 && LCIsReasonableDyldVtableOffset((uintptr_t)imm9)) {
+                *vtableOffset = (uintptr_t)imm9;
+                return true;
+            }
+        }
+    }
+
+    for(uint32_t offset = adrpOffset + 2; offset < adrpOffset + 20; ++offset) {
+        uint32_t instruction = baseAddr[offset];
+        if(!LCIsLdrUnsignedImmediate(instruction)) {
+            continue;
+        }
+
+        uint32_t size = (instruction & 0xC0000000) >> 30;
+        uintptr_t candidateOffset = ((instruction & 0x3FFC00) >> 10) << size;
+        if(LCIsReasonableDyldVtableOffset(candidateOffset)) {
+            *vtableOffset = candidateOffset;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool LCTryFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t adrpOffset, void*** vtableFunctionPtr) {
+    uint32_t* adrpInstPtr = baseAddr + adrpOffset;
+    if(!LCIsAdrp(*adrpInstPtr)) {
+        return false;
+    }
+
+    uintptr_t vtableOffset = 0;
+    if(!LCFindDyldApiVtableOffset(baseAddr, adrpOffset, &vtableOffset)) {
+        return false;
+    }
+
+    void* gdyldPtr = (void*)aarch64_emulate_adrp_ldr(*adrpInstPtr, *(baseAddr + adrpOffset + 1), (uint64_t)(baseAddr + adrpOffset));
+    if(!gdyldPtr || !*(void**)gdyldPtr) {
+        return false;
+    }
+
+    void* vtablePtr = **(void***)gdyldPtr;
+    if(!vtablePtr) {
+        return false;
+    }
+
+    *vtableFunctionPtr = (void**)((uint8_t*)vtablePtr + vtableOffset);
+    return true;
+}
+
+static bool LCFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t preferredAdrpOffset, void*** vtableFunctionPtr, uint32_t* matchedAdrpOffset) {
+    if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, preferredAdrpOffset, vtableFunctionPtr)) {
+        *matchedAdrpOffset = preferredAdrpOffset;
+        return true;
+    }
+
+    if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, preferredAdrpOffset + 20, vtableFunctionPtr)) {
+        *matchedAdrpOffset = preferredAdrpOffset + 20;
+        return true;
+    }
+
+    for(uint32_t offset = 0; offset < 96; ++offset) {
+        if(offset == preferredAdrpOffset || offset == preferredAdrpOffset + 20) {
+            continue;
+        }
+        if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, offset, vtableFunctionPtr)) {
+            *matchedAdrpOffset = offset;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** origFunction, void* hookFunction) {
     
     uint32_t* baseAddr = dlsym(RTLD_DEFAULT, functionName);
-    assert(baseAddr != 0);
+    if(!baseAddr) {
+        NSLog(@"[LC] dyld hook skipped: %s was not found", functionName);
+        return false;
+    }
     /*
      arm64e 26.4b1+ has extra 20 instructions between adrpOffset and adrp
      arm64e
@@ -219,49 +331,32 @@ bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** or
      00000001ac934c90         ldr        x2, [x8, #0x258]
      00000001ac934c94         br         x2
      */
-    uint32_t* adrpInstPtr = baseAddr + adrpOffset;
-    if ((*adrpInstPtr & 0x9f000000) != 0x90000000) {
-        adrpOffset += 20;
-        adrpInstPtr = baseAddr + adrpOffset;
+    uint32_t matchedAdrpOffset = 0;
+    void** vtableFunctionPtr = 0;
+    if(!LCFindDyldApiVtableFunctionPtr(baseAddr, adrpOffset, &vtableFunctionPtr, &matchedAdrpOffset)) {
+        NSLog(@"[LC] dyld hook skipped: %s API thunk layout changed", functionName);
+        return false;
     }
-    assert ((*adrpInstPtr & 0x9f000000) == 0x90000000);
-    void* gdyldPtr = (void*)aarch64_emulate_adrp_ldr(*adrpInstPtr, *(baseAddr + adrpOffset + 1), (uint64_t)(baseAddr + adrpOffset));
-    
-    assert(gdyldPtr != 0);
-    assert(*(void**)gdyldPtr != 0);
-    void* vtablePtr = **(void***)gdyldPtr;
-    
-    void* vtableFunctionPtr = 0;
-    uint32_t* movInstPtr = baseAddr + adrpOffset + 6;
-
-    if((*movInstPtr & 0x7F800000) == 0x52800000) {
-        // arm64e, mov imm + add + ldr
-        uint32_t imm16 = (*movInstPtr & 0x1FFFE0) >> 5;
-        vtableFunctionPtr = vtablePtr + imm16;
-    } else if ((*movInstPtr & 0xFFE00C00) == 0xF8400C00) {
-        // arm64e, ldr immediate Pre-index 64bit
-        uint32_t imm9 = (*movInstPtr & 0x1FF000) >> 12;
-        vtableFunctionPtr = vtablePtr + imm9;
-    } else {
-        // arm64
-        uint32_t* ldrInstPtr2 = baseAddr + adrpOffset + 3;
-        assert((*ldrInstPtr2 & 0xBFC00000) == 0xB9400000);
-        uint32_t size2 = (*ldrInstPtr2 & 0xC0000000) >> 30;
-        uint32_t imm12_2 = (*ldrInstPtr2 & 0x3FFC00) >> 10;
-        vtableFunctionPtr = vtablePtr + (imm12_2 << size2);
+    if(matchedAdrpOffset != adrpOffset) {
+        NSLog(@"[LC] dyld hook resolved moved %s thunk at instruction offset %u", functionName, matchedAdrpOffset);
     }
-
     
+    if(!vtableFunctionPtr) {
+        NSLog(@"[LC] dyld hook skipped: %s vtable function pointer was not found", functionName);
+        return false;
+    }
     kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)vtableFunctionPtr, sizeof(uintptr_t), false, PROT_READ | PROT_WRITE | VM_PROT_COPY);
     if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+        if(!os_tpro_is_supported()) {
+            NSLog(@"[LC] dyld hook skipped: %s vm_protect failed: %d", functionName, ret);
+            return false;
+        }
         os_thread_self_restrict_tpro_to_rw();
     }
     *origFunction = (void*)*(void**)vtableFunctionPtr;
     *(uint64_t*)vtableFunctionPtr = (uint64_t)hookFunction;
     builtin_vm_protect(mach_task_self(), (mach_vm_address_t)vtableFunctionPtr, sizeof(uintptr_t), false, PROT_READ);
-    if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
         os_thread_self_restrict_tpro_to_ro();
     }
     return true;
@@ -283,12 +378,18 @@ bool initGuestSDKVersionInfo(void) {
         saveCachedSymbol(@"__ZN5dyld3L11sVersionMapE", dyldBase, offset);
     }
     
-    assert(versionMapPtr);
+    if(!versionMapPtr) {
+        NSLog(@"[LC] SDK spoof disabled: dyld version map was not found");
+        return false;
+    }
     // however sVersionMap's struct size is also unknown, but we can figure it out
     // we assume the size is 10K so we won't need to change this line until maybe iOS 40
     uint32_t* versionMapEnd = versionMapPtr + 2560;
     // ensure the first is versionSet and the third is iOS version (5.0.0)
-    assert(versionMapPtr[0] == 0x07db0901 && versionMapPtr[2] == 0x00050000);
+    if(versionMapPtr[0] != 0x07db0901 || versionMapPtr[2] != 0x00050000) {
+        NSLog(@"[LC] SDK spoof disabled: dyld version map layout changed");
+        return false;
+    }
     // get struct size. we assume size is smaller then 128. appearently Apple won't have so many platforms
     uint32_t size = 0;
     for(int i = 1; i < 128; ++i) {
@@ -298,7 +399,10 @@ bool initGuestSDKVersionInfo(void) {
             break;
         }
     }
-    assert(size);
+    if(!size) {
+        NSLog(@"[LC] SDK spoof disabled: dyld version map size was not detected");
+        return false;
+    }
     
     NSOperatingSystemVersion currentVersion = [[NSProcessInfo processInfo] operatingSystemVersion];
     uint32_t maxVersion = ((uint32_t)currentVersion.majorVersion << 16) | ((uint32_t)currentVersion.minorVersion << 8);
@@ -529,7 +633,10 @@ void *dlopen_nolock(const char *path, int mode) {
     tidToIgnore = mach_thread_self();
     const char *libdyldPath = "/usr/lib/system/libdyld.dylib";
     mach_header_u *libdyldHeader = LCGetLoadedImageHeader(0, libdyldPath);
-    assert(libdyldHeader != NULL);
+    if(!libdyldHeader) {
+        NSLog(@"[LC] libdyld header not found; falling back to normal dlopen");
+        return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+    }
 #if !TARGET_OS_SIMULATOR
     NSString *lockPtrName = @"dyld4::LibSystemHelpers::os_unfair_recursive_lock_lock_with_options";
     NSString *unlockPtrName = @"dyld4::LibSystemHelpers::os_unfair_recursive_lock_unlock_with_options";
@@ -545,19 +652,29 @@ void *dlopen_nolock(const char *path, int mode) {
     
     if(!unlockPtr || !lockPtr || (shouldPatchTrylock && !trylockPtr)) {
         void **vtableLibSystemHelpers = litehook_find_dsc_symbol(libdyldPath, "__ZTVN5dyld416LibSystemHelpersE");
+        if(!vtableLibSystemHelpers) {
+            NSLog(@"[LC] dyld LibSystemHelpers vtable not found; falling back to normal dlopen");
+            return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+        }
         
         if(!lockPtr) {
             void *lockFunc = litehook_find_dsc_symbol(libdyldPath, "__ZNK5dyld416LibSystemHelpers42os_unfair_recursive_lock_lock_with_optionsEP26os_unfair_recursive_lock_s24os_unfair_lock_options_t");
-            int lockOffset = searchVtable(vtableLibSystemHelpers, lockFunc);
-            NSCAssert(lockOffset != -1, @"dyld has changed: lockOffset not found in vtable");
+            int lockOffset = lockFunc ? searchVtable(vtableLibSystemHelpers, lockFunc) : -1;
+            if(lockOffset == -1) {
+                NSLog(@"[LC] dyld lock function layout changed; falling back to normal dlopen");
+                return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+            }
             lockPtr = vtableLibSystemHelpers + lockOffset;
             saveCachedSymbol(lockPtrName, libdyldHeader, (uintptr_t)lockPtr - (uintptr_t)libdyldHeader);
         }
         
         if(!unlockPtr) {
             void *unlockFunc = litehook_find_dsc_symbol(libdyldPath, "__ZNK5dyld416LibSystemHelpers31os_unfair_recursive_lock_unlockEP26os_unfair_recursive_lock_s");
-            int unlockOffset = searchVtable(vtableLibSystemHelpers, unlockFunc);
-            NSCAssert(unlockOffset != -1, @"dyld has changed: unlockOffset not found in vtable");
+            int unlockOffset = unlockFunc ? searchVtable(vtableLibSystemHelpers, unlockFunc) : -1;
+            if(unlockOffset == -1) {
+                NSLog(@"[LC] dyld unlock function layout changed; falling back to normal dlopen");
+                return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+            }
             unlockPtr = vtableLibSystemHelpers + unlockOffset;
             saveCachedSymbol(unlockPtrName, libdyldHeader, (uintptr_t)unlockPtr - (uintptr_t)libdyldHeader);
         }
@@ -566,7 +683,7 @@ void *dlopen_nolock(const char *path, int mode) {
             // after 26.5b2 dyld4::RuntimeLocks::couldDlopenLock is added and called when dlopen is called with RTLD_NO_LOAD,
             // which calls os_unfair_recursive_lock_trylock, so we should also hook that
             void *tryLockFunc = litehook_find_dsc_symbol(libdyldPath, "__ZNK5dyld416LibSystemHelpers32os_unfair_recursive_lock_trylockEP26os_unfair_recursive_lock_s");
-            int trylockOffset = searchVtable(vtableLibSystemHelpers, tryLockFunc);
+            int trylockOffset = tryLockFunc ? searchVtable(vtableLibSystemHelpers, tryLockFunc) : -1;
             // in case people use b1, we don't use NSCAssert here
             if(trylockOffset != -1) {
                 trylockPtr = vtableLibSystemHelpers + trylockOffset;
@@ -578,12 +695,19 @@ void *dlopen_nolock(const char *path, int mode) {
         }
     }
     
+    if(!lockPtr || !unlockPtr) {
+        NSLog(@"[LC] dyld lock pointers incomplete; falling back to normal dlopen");
+        return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+    }
     kern_return_t ret;
     mach_vm_address_t vtablePageStart = (mach_vm_address_t)((uint64_t)lockPtr & ~(16384 - 1));
     
     ret = builtin_vm_protect(mach_task_self(), vtablePageStart, 16384, false, PROT_READ | PROT_WRITE | VM_PROT_COPY);
     if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+        if(!os_tpro_is_supported()) {
+            NSLog(@"[LC] dyld lock patch vm_protect failed; falling back to normal dlopen: %d", ret);
+            return hookedDlopen ? jitless_hook_dlopen(pathToOpen, mode) : dlopen(pathToOpen, mode);
+        }
         os_thread_self_restrict_tpro_to_rw();
     }
     void *origLockPtr = *lockPtr, *origUnlockPtr = *unlockPtr, *origTryLockPtr = 0;
@@ -595,8 +719,7 @@ void *dlopen_nolock(const char *path, int mode) {
     }
     
     ret = builtin_vm_protect(mach_task_self(), vtablePageStart, 16384, false, PROT_READ);
-    if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
         os_thread_self_restrict_tpro_to_rw();
     }
     
@@ -608,8 +731,7 @@ void *dlopen_nolock(const char *path, int mode) {
     }
     
     ret = builtin_vm_protect(mach_task_self(), vtablePageStart, 16384, false, PROT_READ | PROT_WRITE);
-    if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
         os_thread_self_restrict_tpro_to_rw();
     }
     *lockPtr = origLockPtr;
@@ -619,8 +741,7 @@ void *dlopen_nolock(const char *path, int mode) {
     }
     
     ret = builtin_vm_protect(mach_task_self(), vtablePageStart, 16384, false, PROT_READ);
-    if(ret != KERN_SUCCESS) {
-        assert(os_tpro_is_supported());
+    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
         os_thread_self_restrict_tpro_to_rw();
     }
 #else
@@ -641,9 +762,24 @@ void *exception_handler(void *unused) {
     abort();
 }
 
+static void *LCOrigDlopenResolvingLoaderPath(const char *path, int mode) {
+    void *callerAddr = __builtin_return_address(0);
+    struct dl_info info;
+    if (path && !strncmp(path, "@loader_path/", 13) && dladdr(callerAddr, &info)) {
+        char resolvedPath[PATH_MAX];
+        snprintf(resolvedPath, sizeof(resolvedPath), "%s/%s", dirname((char *)info.dli_fname), path + 13);
+        return orig_dlopen(resolvedPath, mode);
+    }
+    return orig_dlopen(path, mode);
+}
+
 void *jitless_hook_dlopen(const char *path, int mode) {
     if (!excPort) {
         searchDyldFunctions();
+        if(!orig_dyld_mmap) {
+            NSLog(@"[LC] dyld mmap function not found; falling back to normal dlopen");
+            return LCOrigDlopenResolvingLoaderPath(path, mode);
+        }
         mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &excPort);
         mach_port_insert_right(mach_task_self(), excPort, excPort, MACH_MSG_TYPE_MAKE_SEND);
         pthread_t thread;
@@ -658,9 +794,19 @@ void *jitless_hook_dlopen(const char *path, int mode) {
     thread_state_flavor_t flavor = ARM_THREAD_STATE64;
     arm_debug_state64_t origDebugState;
     mach_port_t thread = mach_thread_self();
-    thread_get_state(thread, ARM_DEBUG_STATE64, (thread_state_t)&origDebugState, &(mach_msg_type_number_t){ARM_DEBUG_STATE64_COUNT});
-    thread_swap_exception_ports(thread, mask, handler, behavior, flavor, &mask, &masksCnt, &handler, &behavior, &flavor);
-    assert(masksCnt == 1);
+    kern_return_t stateRet = thread_get_state(thread, ARM_DEBUG_STATE64, (thread_state_t)&origDebugState, &(mach_msg_type_number_t){ARM_DEBUG_STATE64_COUNT});
+    if(stateRet != KERN_SUCCESS) {
+        NSLog(@"[LC] failed to read ARM debug state; falling back to normal dlopen: %d", stateRet);
+        return LCOrigDlopenResolvingLoaderPath(path, mode);
+    }
+    kern_return_t swapRet = thread_swap_exception_ports(thread, mask, handler, behavior, flavor, &mask, &masksCnt, &handler, &behavior, &flavor);
+    if(swapRet != KERN_SUCCESS) {
+        NSLog(@"[LC] failed to install dyld mmap exception hook; falling back to normal dlopen: %d", swapRet);
+        return LCOrigDlopenResolvingLoaderPath(path, mode);
+    }
+    if(masksCnt != 1) {
+        NSLog(@"[LC] unexpected saved exception port count while hooking dyld mmap: %u", masksCnt);
+    }
     
     // hook dyld's mmap
     arm_debug_state64_t hookDebugState = {
@@ -670,16 +816,7 @@ void *jitless_hook_dlopen(const char *path, int mode) {
     thread_set_state(thread, ARM_DEBUG_STATE64, (thread_state_t)&hookDebugState, ARM_DEBUG_STATE64_COUNT);
     
     // fixup @loader_path since we cannot use musttail here
-    void *result;
-    void *callerAddr = __builtin_return_address(0);
-    struct dl_info info;
-    if (path && !strncmp(path, "@loader_path/", 13) && dladdr(callerAddr, &info)) {
-        char resolvedPath[PATH_MAX];
-        snprintf(resolvedPath, sizeof(resolvedPath), "%s/%s", dirname((char *)info.dli_fname), path + 13);
-        result = orig_dlopen(resolvedPath, mode);
-    } else {
-        result = orig_dlopen(path, mode);
-    }
+    void *result = LCOrigDlopenResolvingLoaderPath(path, mode);
     
     // restore old thread states
     thread_set_state(thread, ARM_DEBUG_STATE64, (thread_state_t)&origDebugState, ARM_DEBUG_STATE64_COUNT);
