@@ -126,6 +126,8 @@ This is not native iOS 32-bit support. LiveExec32 is still experimental and its 
 
 The `Build Unsigned IPA` GitHub Actions workflow builds a real-device `iphoneos` app with code signing disabled, strips local signing metadata, and uploads `LiveContainer-unsigned.ipa` for import into SideStore or AltStore. Pushes to `main` also publish the latest IPA release and update the AltStore source automatically.
 
+This fork uses bundle identifier `com.nightvibes33.livecontainer32`, with matching keychain access groups, so it installs separately from upstream LiveContainer and avoids identity collisions when testing LiveContainer inside LiveContainer.
+
 AltStore/SideStore source URL:
 `https://raw.githubusercontent.com/NightVibes33/livecontainer-32bit-unsigned-ipa/main/apps.json`
 

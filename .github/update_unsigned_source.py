@@ -126,7 +126,7 @@ def build_source():
     }
     app = {
         "name": "LiveContainer 32-bit Unsigned",
-        "bundleIdentifier": "com.kdt.livecontainer",
+        "bundleIdentifier": "com.nightvibes33.livecontainer32",
         "developerName": "NightVibes33 / LiveContainer Team",
         "subtitle": "LiveContainer with bundled LiveExec32 for experimental 32-bit IPA launches.",
         "localizedDescription": "Run iOS apps through LiveContainer. This fork bundles LiveExec32 for experimental 32-bit IPA translation and ships as an unsigned IPA for SideStore and AltStore.",
@@ -155,7 +155,7 @@ def build_source():
         "apps": [app],
         "news": [
             {
-                "appID": "com.kdt.livecontainer",
+                "appID": "com.nightvibes33.livecontainer32",
                 "caption": "Unsigned IPA auto-release updated.",
                 "date": date,
                 "identifier": f"unsigned-{build_version}",
