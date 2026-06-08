@@ -391,7 +391,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
                     if(!success) {
                         completetionHandler(NO, error.localizedDescription);
                     } else {
-                        bool signatureValid = checkCodeSignature(executablePath.UTF8String);
+                        bool signatureValid = is32bit || checkCodeSignature(executablePath.UTF8String);
                         if(signatureValid) {
                             completetionHandler(YES, [error localizedDescription]);
                         } else {
