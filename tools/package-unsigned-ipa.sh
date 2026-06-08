@@ -45,7 +45,6 @@ trap 'rm -rf "$workdir"' EXIT HUP INT TERM
 mkdir -p "$workdir/Payload"
 cp -R "$app_path" "$workdir/Payload/"
 
-find "$workdir/Payload" -type d -name _CodeSignature -prune -exec rm -rf {} +
 find "$workdir/Payload" -type f \( -name embedded.mobileprovision -o -name '*.xcent' \) -delete
 
 rm -f "$output_ipa"

@@ -309,7 +309,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     NSString *execPath = [NSString stringWithFormat:@"%@/%@", appPath, _infoPlist[@"CFBundleExecutable"]];
     
     // Update patch
-    int currentPatchRev = 7;
+    int currentPatchRev = 8;
     bool needPatch = [info[@"LCPatchRevision"] intValue] < currentPatchRev;
     if (needPatch || forceSign) {
         // copy-delete-move to avoid EXC_BAD_ACCESS (SIGKILL - CODESIGNING)
@@ -320,23 +320,32 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         [fm moveItemAtPath:backupPath toPath:execPath error:&err];
     }
     
+#if is32BitSupported
+    bool is32bit = self.is32bit;
+#else
     bool is32bit = false;
-    if (needPatch) {
+#endif
+    bool shouldInspectExecutable = needPatch || forceSign || info[@"is32bit"] == nil;
+    if (shouldInspectExecutable) {
         __block bool has64bitSlice = NO;
         __block bool isEncrypted = false;
         NSString *error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
             if(header->cputype == CPU_TYPE_ARM64) {
                 has64bitSlice |= YES;
-                int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                    info[@"LCTweakLoaderCantInject"] = @YES;
-                    info[@"dontInjectTweakLoader"] = @YES;
+                if(needPatch) {
+                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                        info[@"LCTweakLoaderCantInject"] = @YES;
+                        info[@"dontInjectTweakLoader"] = @YES;
+                    }
                 }
             }
             isEncrypted |= LCIsMachOEncrypted(header);
         });
         is32bit = !has64bitSlice;
-        LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+        if(needPatch) {
+            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+        }
         if (isEncrypted) {
             error = @"The app you tried to install is encrypted. Please provide decrypted app.";
         }
@@ -345,18 +354,21 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
             completetionHandler(NO, error);
             return;
         }
-        info[@"LCPatchRevision"] = @(currentPatchRev);
-        forceSign = true;
-        
+        if(needPatch) {
+            info[@"LCPatchRevision"] = @(currentPatchRev);
+            forceSign = true;
+        }
+#if is32BitSupported
+        self.is32bit = is32bit;
+#else
         [self save];
+#endif
     }
 #if !is32BitSupported
     if(is32bit) {
         completetionHandler(NO, @"32-bit app is NOT supported in this build. Enable the experimental is32BitSupported build flag and install LiveExec32.app to try the 32-bit translation layer.");
         return;
     }
-#else
-    self.is32bit = is32bit;
 #endif
 
     if (!LCSharedUtils.certificatePassword || self.dontSign) {

@@ -105,6 +105,59 @@ jobs:
           ditto "$LIVEEXEC_APP" "$APP_PATH/LiveExec32.app"
           test -f "$APP_PATH/LiveExec32.app/Info.plist"
           test -f "$APP_PATH/LiveExec32.app/LiveExec32"
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")
+          make_entitlements() {
+            python3 - "$1" "$2" "$3" <<'PY'
+          import sys
+          from pathlib import Path
+          source_path, entitlements_path, bundle_id = sys.argv[1:4]
+          text = Path(source_path).read_text()
+          replacements = {
+              '$(DEVELOPMENT_TEAM)': 'AAAAA11111',
+              '$(PRODUCT_BUNDLE_IDENTIFIER)': bundle_id,
+              '$(APP_GROUP_SIDESTORE)': 'group.com.SideStore.SideStore',
+              '$(APP_GROUP_ALTSTORE)': 'group.com.rileytestut.AltStore',
+              '$(AppIdentifierPrefix)': 'AAAAA11111.',
+          }
+          for key, value in replacements.items():
+              text = text.replace(key, value)
+          Path(entitlements_path).write_text(text)
+          PY
+          }
+          MAIN_ENTITLEMENTS="$RUNNER_TEMP/LiveContainer-ad-hoc-entitlements.plist"
+          LIVEPROCESS_ENTITLEMENTS="$RUNNER_TEMP/LiveProcess-ad-hoc-entitlements.plist"
+          LAUNCH_ENTITLEMENTS="$RUNNER_TEMP/LaunchAppExtension-ad-hoc-entitlements.plist"
+          LAUNCH_HELPER_ENTITLEMENTS="$RUNNER_TEMP/LaunchAppExtensionHelper-ad-hoc-entitlements.plist"
+          make_entitlements entitlements.xml "$MAIN_ENTITLEMENTS" "$BUNDLE_ID"
+          make_entitlements LiveProcess/LiveProcess.entitlements "$LIVEPROCESS_ENTITLEMENTS" "$BUNDLE_ID.LiveProcess"
+          make_entitlements LaunchAppExtension/LaunchAppExtension.entitlements "$LAUNCH_ENTITLEMENTS" "$BUNDLE_ID.LaunchAppExtension"
+          make_entitlements LaunchAppExtensionHelper/LaunchAppExtensionHelper.entitlements "$LAUNCH_HELPER_ENTITLEMENTS" "$BUNDLE_ID.LaunchAppExtensionHelper"
+          find "$APP_PATH" -type f \( -name '*.dylib' -o -name '*.so' \) -print | while IFS= read -r binary; do
+            codesign --force --sign - --timestamp=none "$binary"
+          done
+          if [ -d "$APP_PATH/Frameworks" ]; then
+            find "$APP_PATH/Frameworks" -maxdepth 1 -type d -name '*.framework' -print | while IFS= read -r framework; do
+              codesign --force --sign - --timestamp=none "$framework"
+            done
+          fi
+          if [ -d "$APP_PATH/PlugIns" ]; then
+            for appex in "$APP_PATH"/PlugIns/*.appex; do
+              [ -d "$appex" ] || continue
+              case "$(basename "$appex")" in
+                LiveProcess.appex) appex_entitlements="$LIVEPROCESS_ENTITLEMENTS" ;;
+                LaunchAppExtension.appex) appex_entitlements="$LAUNCH_ENTITLEMENTS" ;;
+                LaunchAppExtensionHelper.appex) appex_entitlements="$LAUNCH_HELPER_ENTITLEMENTS" ;;
+                *) appex_entitlements= ;;
+              esac
+              if [ -n "${appex_entitlements:-}" ]; then
+                codesign --force --sign - --timestamp=none --entitlements "$appex_entitlements" "$appex"
+              else
+                codesign --force --sign - --timestamp=none "$appex"
+              fi
+            done
+          fi
+          codesign --force --sign - --timestamp=none "$APP_PATH/LiveExec32.app"
+          codesign --force --sign - --timestamp=none --entitlements "$MAIN_ENTITLEMENTS" "$APP_PATH"
           tools/package-unsigned-ipa.sh "$APP_PATH" "$OUTPUT_IPA"
 
       - name: Verify unsigned IPA
@@ -117,11 +170,11 @@ jobs:
           test -d ipa-check/Payload/LiveContainer.app/LiveExec32.app
           test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/Info.plist
           test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/LiveExec32
+          test -d ipa-check/Payload/LiveContainer.app/_CodeSignature
           test ! -e ipa-check/Payload/LiveContainer.app/embedded.mobileprovision
-          if find ipa-check/Payload -type d -name _CodeSignature | grep -q .; then
-            echo "unexpected _CodeSignature directory in unsigned IPA" >&2
-            exit 1
-          fi
+          codesign -d --entitlements :- ipa-check/Payload/LiveContainer.app > ipa-check-entitlements.plist
+          grep -q 'group.com.SideStore.SideStore' ipa-check-entitlements.plist
+          grep -q 'group.com.rileytestut.AltStore' ipa-check-entitlements.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' ipa-check/Payload/LiveContainer.app/Info.plist
