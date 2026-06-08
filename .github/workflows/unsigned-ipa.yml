@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-unsigned-ipa:
@@ -77,3 +77,17 @@ jobs:
           name: LiveContainer-unsigned-ipa
           path: ${{ env.OUTPUT_IPA }}
           if-no-files-found: error
+
+      - name: Publish latest unsigned IPA release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release delete unsigned-latest --cleanup-tag --yes || true
+          gh release create unsigned-latest "$OUTPUT_IPA" \
+            --target "$GITHUB_SHA" \
+            --title "Latest unsigned IPA" \
+            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import." \
+            --prerelease \
+            --latest
