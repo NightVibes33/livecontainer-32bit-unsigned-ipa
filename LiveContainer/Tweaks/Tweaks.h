@@ -24,6 +24,7 @@ extern uint32_t appMainImageIndex;
 extern void* appExecutableHandle;
 extern bool tweakLoaderLoaded;
 void* getGuestAppHeader(void);
+bool LCUpdateAppMainImageIndexForPath(const char *path);
 void* getDSCAddr(void);
 void* getCachedSymbol(NSString* symbolName, struct mach_header_64* header);
 void saveCachedSymbol(NSString* symbolName, struct mach_header_64* header, uint64_t offset);

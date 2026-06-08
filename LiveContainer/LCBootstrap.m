@@ -652,6 +652,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         *path = oldPath;
         return appError;
     }
+    if(!LCUpdateAppMainImageIndexForPath(appExecPath)) {
+        NSLog(@"[LCBootstrap] Failed to find loaded app image for %s", appExecPath);
+    }
     
     if([guestAppInfo[@"dontInjectTweakLoader"] boolValue] && ![guestAppInfo[@"dontLoadTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;

@@ -393,6 +393,26 @@ void* getGuestAppHeader(void) {
     return (void*)orig_dyld_get_image_header(appMainImageIndex);
 }
 
+bool LCUpdateAppMainImageIndexForPath(const char *path) {
+    if(!path) {
+        return false;
+    }
+    NSString *targetPath = [[NSString stringWithUTF8String:path] stringByStandardizingPath];
+    uint32_t imageCount = orig_dyld_image_count();
+    for(uint32_t i = appMainImageIndex; i < imageCount; i++) {
+        const char *imageName = orig_dyld_get_image_name(i);
+        if(!imageName) {
+            continue;
+        }
+        NSString *imagePath = [[NSString stringWithUTF8String:imageName] stringByStandardizingPath];
+        if([imagePath isEqualToString:targetPath]) {
+            appMainImageIndex = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 #pragma mark - Fix black screen
 #if !TARGET_OS_SIMULATOR
 #define HOOK_LOCK_1ST_ARG void *ptr,
