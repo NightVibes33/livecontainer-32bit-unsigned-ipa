@@ -369,7 +369,7 @@ struct LCSettingsView: View {
                         HStack {
                             Text("LiveExec32 .app path")
                             Spacer()
-                            TextField("", text: $liveExec32Path)
+                            TextField("LiveExec32.app", text: $liveExec32Path)
                                 .multilineTextAlignment(.trailing)
                         }
                         #endif

@@ -1,0 +1,79 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned real-device IPA
+    runs-on: macos-latest
+    env:
+      SCHEME: LiveContainer
+      CONFIGURATION: Release
+      DERIVED_DATA: build/DerivedData
+      OUTPUT_IPA: LiveContainer-unsigned.ipa
+    steps:
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Build app without signing
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project LiveContainer.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+
+      - name: Package unsigned IPA
+        run: |
+          set -eu
+          APP_PATH=$(find "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" -maxdepth 2 -type d -name 'LiveContainer.app' -print -quit)
+          if [ -z "$APP_PATH" ]; then
+            echo "LiveContainer.app was not produced" >&2
+            find "$DERIVED_DATA/Build/Products" -maxdepth 4 -print >&2
+            exit 1
+          fi
+          tools/package-unsigned-ipa.sh "$APP_PATH" "$OUTPUT_IPA"
+
+      - name: Verify unsigned IPA
+        run: |
+          set -eu
+          test -f "$OUTPUT_IPA"
+          unzip -q "$OUTPUT_IPA" -d ipa-check
+          test -d ipa-check/Payload/LiveContainer.app
+          test -f ipa-check/Payload/LiveContainer.app/Info.plist
+          test ! -e ipa-check/Payload/LiveContainer.app/embedded.mobileprovision
+          if find ipa-check/Payload -type d -name _CodeSignature | grep -q .; then
+            echo "unexpected _CodeSignature directory in unsigned IPA" >&2
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveContainer-unsigned-ipa
+          path: ${{ env.OUTPUT_IPA }}
+          if-no-files-found: error

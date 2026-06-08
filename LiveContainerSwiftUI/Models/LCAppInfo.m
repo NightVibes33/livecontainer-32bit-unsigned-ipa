@@ -352,7 +352,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     }
 #if !is32BitSupported
     if(is32bit) {
-        completetionHandler(NO, @"32-bit app is NOT supported!");
+        completetionHandler(NO, @"32-bit app is NOT supported in this build. Enable the experimental is32BitSupported build flag and install LiveExec32.app to try the 32-bit translation layer.");
         return;
     }
 #else

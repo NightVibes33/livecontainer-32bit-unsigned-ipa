@@ -117,6 +117,15 @@ Unfortunately, not all apps work in LiveContainer, so we have a [compatibility l
 ## Building
 Open Xcode, edit `DEVELOPMENT_TEAM[config=Debug]` in `xcconfigs/Global.xcconfig` to your team id and compile.
 
+### Experimental 32-bit IPA translation
+This fork enables LiveContainer's guarded `is32BitSupported` path. 32-bit IPAs are detected during install and launched through an external `LiveExec32.app` translation layer when JIT is available.
+
+Build [LiveExec32](https://github.com/LiveContainer/LiveExec32) separately, then put the resulting `LiveExec32.app` in LiveContainer's Documents folder. The default relative path is `LiveExec32.app`; advanced users can override it in Developer Settings under `LiveExec32 .app path`. The helper script `tools/stage-liveexec32-layer.sh` can copy a built `LiveExec32.app` into the expected Documents location.
+
+This is not native iOS 32-bit support. LiveExec32 is still experimental and its upstream README notes that full app support still needs Objective-C class, object, and method proxying between the 32-bit guest and 64-bit host.
+
+The `Build Unsigned IPA` GitHub Actions workflow builds a real-device `iphoneos` app with code signing disabled, strips local signing metadata, and uploads `LiveContainer-unsigned.ipa` for import into SideStore or AltStore.
+
 ## Project structure
 ### Main executable
 - Core of LiveContainer

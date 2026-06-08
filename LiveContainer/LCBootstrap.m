@@ -33,6 +33,10 @@ bool isSharedBundle = false;
 bool isSideStore = false;
 bool sideStoreExist = false;
 
+#if is32BitSupported
+static NSString * const LCDefault32BitLayerPath = @"LiveExec32.app";
+#endif
+
 @implementation NSUserDefaults(LiveContainer)
 + (instancetype)lcUserDefaults {
     return lcUserDefaults;
@@ -501,25 +505,29 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
     if(is32bit) {
         if (!isJitEnabled) {
-            return @"JIT is required to run 32-bit apps.";
+            return @"JIT is required to run 32-bit apps through LiveExec32.";
         }
         
         NSString *selected32BitLayer = [lcUserDefaults stringForKey:@"selected32BitLayer"];
         if(!selected32BitLayer || [selected32BitLayer length] == 0) {
-            appError = @"No 32-bit translation layer installed";
-            NSLog(@"[LCBootstrap] %@", appError);
-            *path = oldPath;
-            return appError;
+            selected32BitLayer = LCDefault32BitLayerPath;
         }
-        NSBundle *selected32bitLayerBundle = [NSBundle bundleWithPath:[docPath stringByAppendingPathComponent:selected32BitLayer]]; //TODO make it user friendly;
+        NSString *selected32BitLayerPath = [docPath stringByAppendingPathComponent:selected32BitLayer];
+        NSBundle *selected32bitLayerBundle = [NSBundle bundleWithPath:selected32BitLayerPath];
         if(!selected32bitLayerBundle) {
-            appError = @"The specified LiveExec32.app path is not found";
+            appError = [NSString stringWithFormat:@"No 32-bit translation layer installed. Put LiveExec32.app in LiveContainer Documents or set its relative path in Developer Settings. Tried: %@", selected32BitLayer];
             NSLog(@"[LCBootstrap] %@", appError);
             *path = oldPath;
             return appError;
         }
-        // maybe need to save selected32bitLayerBundle to static variable?
-        appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+        NSString *selected32BitLayerExecPath = selected32bitLayerBundle.executablePath;
+        if(!selected32BitLayerExecPath || ![NSFileManager.defaultManager fileExistsAtPath:selected32BitLayerExecPath]) {
+            appError = [NSString stringWithFormat:@"The 32-bit translation layer has no executable: %@", selected32BitLayer];
+            NSLog(@"[LCBootstrap] %@", appError);
+            *path = oldPath;
+            return appError;
+        }
+        appExecPath = strdup(selected32BitLayerExecPath.UTF8String);
     }
 #endif
     if(![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
