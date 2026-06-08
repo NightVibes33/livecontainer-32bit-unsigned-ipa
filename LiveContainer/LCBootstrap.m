@@ -613,7 +613,20 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     
     // Preload executable to bypass RT_NOLOAD
     appMainImageIndex = _dyld_image_count();
+#if is32BitSupported
+    LCClearDlopen32BitLayerReroute();
+#endif
     void *appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
+#if is32BitSupported
+    if(!is32bit && LCWasDlopenReroutedTo32BitLayer()) {
+        const char *rerouted32BitLayerPath = LCLastDlopen32BitLayerPath();
+        if(rerouted32BitLayerPath) {
+            NSLog(@"[LCBootstrap] dlopen_nolock rerouted ARMv7 guest through LiveExec32.");
+            appExecPath = strdup(rerouted32BitLayerPath);
+            is32bit = true;
+        }
+    }
+#endif
     appExecutableHandle = appHandle;
     const char *dlerr = dlerror();
     

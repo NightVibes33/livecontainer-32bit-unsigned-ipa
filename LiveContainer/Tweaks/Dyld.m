@@ -5,6 +5,7 @@
 //  Created by s s on 2025/2/7.
 //
 #include <dlfcn.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #import "../../litehook/src/litehook.h"
@@ -30,6 +31,10 @@ bool hookedDlopen = false;
 bool tweakLoaderLoaded = false;
 bool appExecutableFileTypeOverwritten = false;
 const char* lcMainBundlePath = NULL;
+#if is32BitSupported
+static bool lcDlopenReroutedTo32BitLayer = false;
+static char lcDlopen32BitLayerPath[PATH_MAX];
+#endif
 
 void* (*orig_dlopen)(const char *path, int mode) = dlopen;
 void* (*orig_dlsym)(void * __handle, const char * __symbol) = dlsym;
@@ -426,7 +431,81 @@ int searchVtable(void** vtable, void *func) {
     return -1;
 }
 
+#if is32BitSupported
+void LCClearDlopen32BitLayerReroute(void) {
+    lcDlopenReroutedTo32BitLayer = false;
+    lcDlopen32BitLayerPath[0] = 0;
+}
+
+bool LCWasDlopenReroutedTo32BitLayer(void) {
+    return lcDlopenReroutedTo32BitLayer;
+}
+
+const char *LCLastDlopen32BitLayerPath(void) {
+    return lcDlopen32BitLayerPath[0] ? lcDlopen32BitLayerPath : NULL;
+}
+
+static bool LCShouldRerouteDlopenTo32BitLayer(const char *path) {
+    if(!path) {
+        return false;
+    }
+    NSString *pathString = [NSString stringWithUTF8String:path];
+    if(![pathString containsString:@"/Documents/Applications/"] ||
+       ![pathString containsString:@".app/"] ||
+       [pathString containsString:@"/Frameworks/"] ||
+       [pathString.pathExtension length] > 0) {
+        return false;
+    }
+    __block bool has64bitSlice = false;
+    NSString *error = LCParseMachO(path, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+        if(header->cputype == CPU_TYPE_ARM64) {
+            has64bitSlice = true;
+        }
+    });
+    if(error) {
+        return false;
+    }
+    return !has64bitSlice;
+}
+
+static NSString *LCResolveBundled32BitLayerExecPathForDlopen(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    const char *homePath = getenv("LC_HOME_PATH");
+    if(homePath) {
+        NSString *documentsLayer = [NSString stringWithFormat:@"%s/Documents/LiveExec32.app/LiveExec32", homePath];
+        if([fm fileExistsAtPath:documentsLayer]) {
+            return documentsLayer;
+        }
+    }
+
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+    if([bundlePath hasSuffix:@"PlugIns/LiveProcess.appex"]) {
+        bundlePath = bundlePath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+    }
+    NSString *bundledLayer = [bundlePath stringByAppendingPathComponent:@"LiveExec32.app/LiveExec32"];
+    if([fm fileExistsAtPath:bundledLayer]) {
+        return bundledLayer;
+    }
+    return nil;
+}
+#endif
+
 void *dlopen_nolock(const char *path, int mode) {
+#if is32BitSupported
+    const char *pathToOpen = path;
+    if(LCShouldRerouteDlopenTo32BitLayer(path)) {
+        NSString *layerExecPath = LCResolveBundled32BitLayerExecPathForDlopen();
+        if(layerExecPath && [layerExecPath getFileSystemRepresentation:lcDlopen32BitLayerPath maxLength:sizeof(lcDlopen32BitLayerPath)]) {
+            lcDlopenReroutedTo32BitLayer = true;
+            pathToOpen = lcDlopen32BitLayerPath;
+            NSLog(@"[LC] Rerouting 32-bit guest dlopen from %s to %s", path, pathToOpen);
+        } else {
+            NSLog(@"[LC] Could not resolve LiveExec32 for 32-bit guest dlopen: %s", path);
+        }
+    }
+#else
+    const char *pathToOpen = path;
+#endif
     tidToIgnore = mach_thread_self();
     const char *libdyldPath = "/usr/lib/system/libdyld.dylib";
     mach_header_u *libdyldHeader = LCGetLoadedImageHeader(0, libdyldPath);
@@ -503,9 +582,9 @@ void *dlopen_nolock(const char *path, int mode) {
     
     void *result;
     if(hookedDlopen) {
-        result = jitless_hook_dlopen(path, mode);
+        result = jitless_hook_dlopen(pathToOpen, mode);
     } else {
-        result = dlopen(path, mode);
+        result = dlopen(pathToOpen, mode);
     }
     
     ret = builtin_vm_protect(mach_task_self(), vtablePageStart, 16384, false, PROT_READ | PROT_WRITE);
