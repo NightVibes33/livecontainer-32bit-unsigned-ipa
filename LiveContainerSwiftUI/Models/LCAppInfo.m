@@ -359,7 +359,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     self.is32bit = is32bit;
 #endif
 
-    if (!LCSharedUtils.certificatePassword || is32bit || self.dontSign) {
+    if (!LCSharedUtils.certificatePassword || self.dontSign) {
         [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
         completetionHandler(YES, nil);
         return;

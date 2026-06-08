@@ -10,6 +10,15 @@ static uint32_t rnd32(uint32_t v, uint32_t r) {
     return (v + r) & ~r;
 }
 
+static bool LCMachOIs64BitHeader(const struct mach_header_64 *header) {
+    uint32_t magic = *(const uint32_t *)header;
+    return magic == MH_MAGIC_64 || magic == MH_CIGAM_64;
+}
+
+static struct load_command *LCMachOFirstLoadCommand(struct mach_header_64 *header) {
+    return (struct load_command *)((uint8_t *)header + (LCMachOIs64BitHeader(header) ? sizeof(struct mach_header_64) : sizeof(struct mach_header)));
+}
+
 struct dyld_all_image_infos *_alt_dyld_get_all_image_infos(void) {
     static struct dyld_all_image_infos *result;
     if (result) {
@@ -290,7 +299,7 @@ void LCPatchAppBundleFixupARM64eSlice(NSURL *bundleURL) {
 }
 
 void LCChangeMachOUUID(struct mach_header_64 *header) {
-    struct load_command *command = (struct load_command *)(header + 1);
+    struct load_command *command = LCMachOFirstLoadCommand(header);
     for(int i = 0; i < header->ncmds; i++) {
         if(command->cmd == LC_UUID) {
             struct uuid_command *uuidCmd = (struct uuid_command *)command;
@@ -306,7 +315,7 @@ const uint8_t* LCGetMachOUUID(struct mach_header_64 *header) {
     if (!header) return NULL;
     if(*(uint32_t*)header != 0x646c7964) { // dyld
         // Find load commands
-        const struct load_command* command = (const struct load_command*)(header + 1);
+        const struct load_command* command = LCMachOFirstLoadCommand(header);
         
         // Iterate through load commands to find LC_SYMTAB
         for(uint32_t i = 0; i < header->ncmds; i++) {
@@ -323,7 +332,7 @@ const uint8_t* LCGetMachOUUID(struct mach_header_64 *header) {
 }
 
 bool LCIsMachOEncrypted(struct mach_header_64 *header) {
-    struct load_command *command = (struct load_command *)(header + 1);
+    struct load_command *command = LCMachOFirstLoadCommand(header);
     for(int i = 0; i < header->ncmds; i++) {
         if(command->cmd == LC_ENCRYPTION_INFO || command->cmd == LC_ENCRYPTION_INFO_64) {
             return ((struct encryption_info_command *)command)->cryptid != 0;
@@ -420,7 +429,7 @@ struct ui_CS_blob {
 
 
 struct code_signature_command* findSignatureCommand(struct mach_header_64* header) {
-    uint8_t *imageHeaderPtr = (uint8_t*)header + sizeof(struct mach_header_64);
+    uint8_t *imageHeaderPtr = (uint8_t*)LCMachOFirstLoadCommand(header);
     struct load_command *command = (struct load_command *)imageHeaderPtr;
     struct code_signature_command* codeSignCommand = 0;
     for(int i = 0; i < header->ncmds; i++) {

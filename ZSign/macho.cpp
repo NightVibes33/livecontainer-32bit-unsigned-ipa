@@ -268,13 +268,18 @@ bool ZMachO::InjectDylib(bool bWeakInject, const char* szDylibFile)
 bool is_64bit_macho(const char *filepath) {
     FILE *file = fopen(filepath, "rb");
     if (!file) {
-        return false; // Failed to open file
+        return false;
     }
 
-    uint32_t magic;
-    fread(&magic, sizeof(uint32_t), 1, file);
+    uint32_t magic = 0;
+    size_t readCount = fread(&magic, sizeof(uint32_t), 1, file);
     fclose(file);
+    if (readCount != 1) {
+        return false;
+    }
 
-    // check 64-bit Mach-O magic number
-    return magic == MH_MAGIC_64 || magic == FAT_CIGAM;
+    // Historical name kept for callers: this now means any Mach-O zsign can process.
+    return magic == MH_MAGIC || magic == MH_CIGAM ||
+           magic == MH_MAGIC_64 || magic == MH_CIGAM_64 ||
+           magic == FAT_MAGIC || magic == FAT_CIGAM;
 }
