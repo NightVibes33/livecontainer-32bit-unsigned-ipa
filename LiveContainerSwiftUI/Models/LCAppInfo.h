@@ -47,6 +47,7 @@ typedef NS_ENUM(NSInteger, MultitaskSpecified){
 @property NSString* remark;
 #if is32BitSupported
 @property bool is32bit;
+- (bool)refreshIs32bitFromExecutable;
 #endif
 @property UIColor* cachedColor;
 @property UIColor* cachedColorDark;

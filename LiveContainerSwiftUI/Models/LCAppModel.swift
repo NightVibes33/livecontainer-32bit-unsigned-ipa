@@ -325,7 +325,7 @@ class LCAppModel: ObservableObject, Hashable {
         var is32bit = false
         
         #if is32BitSupported
-        is32bit = appInfo.is32bit
+        is32bit = appInfo.refreshIs32bitFromExecutable()
         #endif
         var jitNeeded = appInfo.isJITNeeded
         if let forceJIT {

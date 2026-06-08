@@ -100,6 +100,23 @@ static NSString *LCResolve32BitLayerPath(NSString *docPath, NSString *selected32
     }
     return bundled32BitLayerPath;
 }
+
+static bool LCExecutableRequires32BitLayer(const char *execPath) {
+    if(!execPath) {
+        return false;
+    }
+    __block bool has64bitSlice = false;
+    NSString *error = LCParseMachO(execPath, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+        if(header->cputype == CPU_TYPE_ARM64) {
+            has64bitSlice = true;
+        }
+    });
+    if(error) {
+        NSLog(@"[LCBootstrap] Failed to inspect executable architecture for %s: %@", execPath, error);
+        return false;
+    }
+    return !has64bitSlice;
+}
 #endif
 
 @implementation NSUserDefaults(LiveContainer)
@@ -568,6 +585,10 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     
 #if is32BitSupported
     bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
+    if(!is32bit && LCExecutableRequires32BitLayer(appExecPath)) {
+        NSLog(@"[LCBootstrap] Runtime detected 32-bit guest executable; using LiveExec32 despite stale LCAppInfo.plist.");
+        is32bit = true;
+    }
     if(is32bit) {
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps through LiveExec32.";

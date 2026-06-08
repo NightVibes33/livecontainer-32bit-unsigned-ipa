@@ -309,7 +309,7 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     NSString *execPath = [NSString stringWithFormat:@"%@/%@", appPath, _infoPlist[@"CFBundleExecutable"]];
     
     // Update patch
-    int currentPatchRev = 8;
+    int currentPatchRev = 9;
     bool needPatch = [info[@"LCPatchRevision"] intValue] < currentPatchRev;
     if (needPatch || forceSign) {
         // copy-delete-move to avoid EXC_BAD_ACCESS (SIGKILL - CODESIGNING)
@@ -364,6 +364,11 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
         [self save];
 #endif
     }
+#if is32BitSupported
+    else if(!is32bit) {
+        is32bit = [self refreshIs32bitFromExecutable];
+    }
+#endif
 #if !is32BitSupported
     if(is32bit) {
         completetionHandler(NO, @"32-bit app is NOT supported in this build. Enable the experimental is32BitSupported build flag and install LiveExec32.app to try the 32-bit translation layer.");
@@ -660,6 +665,25 @@ uint32_t dyld_get_sdk_version(const struct mach_header* mh);
     _info[@"is32bit"] = [NSNumber numberWithBool:is32bit];
     [self save];
     
+}
+- (bool)refreshIs32bitFromExecutable {
+    NSString *executableName = _infoPlist[@"CFBundleExecutable"];
+    if(!executableName || !_bundlePath) {
+        return self.is32bit;
+    }
+    NSString *execPath = [_bundlePath stringByAppendingPathComponent:executableName];
+    __block bool has64bitSlice = false;
+    NSString *error = LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+        if(header->cputype == CPU_TYPE_ARM64) {
+            has64bitSlice = true;
+        }
+    });
+    if(error) {
+        NSLog(@"[LC] Failed to refresh 32-bit state for %@: %@", execPath, error);
+        return self.is32bit;
+    }
+    self.is32bit = !has64bitSlice;
+    return self.is32bit;
 }
 #endif
 - (bool)dontSign {
