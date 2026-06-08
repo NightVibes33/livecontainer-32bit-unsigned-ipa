@@ -356,7 +356,9 @@ uint64_t LCFindSymbolOffset(const char *basePath, const char *symbol) {
         void *result = litehook_find_symbol_file(header, symbol);
         offset = (uint64_t)result - (uint64_t)header;
     });
-    NSCAssert(offset != 0, @"Failed to find symbol %s in %s", symbol, path);
+    if(offset == 0) {
+        NSLog(@"[LCMachOUtils] Failed to find symbol %s in %s", symbol, path);
+    }
     return offset;
 }
 
@@ -376,7 +378,12 @@ mach_header_u *LCGetLoadedImageHeader(int i0, const char* name) {
 __attribute__((constructor))
 #endif
 void *getDyldBase(void) {
-    void *dyldBase = (void *)_alt_dyld_get_all_image_infos()->dyldImageLoadAddress;
+    struct dyld_all_image_infos *infos = _alt_dyld_get_all_image_infos();
+    if(!infos || !infos->dyldImageLoadAddress) {
+        NSLog(@"[LCMachOUtils] dyld base not found");
+        return NULL;
+    }
+    void *dyldBase = (void *)infos->dyldImageLoadAddress;
 #if !TARGET_OS_SIMULATOR
     return dyldBase;
 #else

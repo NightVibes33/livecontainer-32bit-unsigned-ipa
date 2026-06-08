@@ -144,6 +144,9 @@ void* getDSCAddr(void) {
 }
 
 void* getCachedSymbol(NSString* symbolName, mach_header_u* header) {
+    if(!header) {
+        return NULL;
+    }
     NSDictionary* symbolOffsetDict = [NSUserDefaults.lcSharedDefaults objectForKey:@"symbolOffsetCache"][symbolName];
     if(!symbolOffsetDict) {
         return NULL;
@@ -161,13 +164,22 @@ void* getCachedSymbol(NSString* symbolName, mach_header_u* header) {
 }
 
 void saveCachedSymbol(NSString* symbolName, mach_header_u* header, uint64_t offset) {
+    if(!header) {
+        NSLog(@"[LC] symbol cache skipped: %@ has no image header", symbolName);
+        return;
+    }
+    const uint8_t* uuid = LCGetMachOUUID(header);
+    if(!uuid) {
+        NSLog(@"[LC] symbol cache skipped: %@ has no image UUID", symbolName);
+        return;
+    }
     NSMutableDictionary* allSymbolOffsetDict = [[NSUserDefaults.lcSharedDefaults objectForKey:@"symbolOffsetCache"] mutableCopy];
     if(!allSymbolOffsetDict) {
         allSymbolOffsetDict = [[NSMutableDictionary alloc] init];
     }
     
     allSymbolOffsetDict[symbolName] = @{
-        @"uuid": [NSData dataWithBytes:LCGetMachOUUID(header) length:16],
+        @"uuid": [NSData dataWithBytes:uuid length:16],
         @"offset": @(offset),
     };
     [NSUserDefaults.lcSharedDefaults setObject:allSymbolOffsetDict forKey:@"symbolOffsetCache"];
@@ -364,6 +376,10 @@ bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** or
 
 bool initGuestSDKVersionInfo(void) {
     void* dyldBase = getDyldBase();
+    if(!dyldBase) {
+        NSLog(@"[LC] SDK spoof disabled: dyld base was not found");
+        return false;
+    }
     // it seems Apple is constantly changing findVersionSetEquivalent's signature so we directly search sVersionMap instead
     uint32_t* versionMapPtr = getCachedSymbol(@"__ZN5dyld3L11sVersionMapE", dyldBase);
     if(!versionMapPtr) {
@@ -372,8 +388,12 @@ bool initGuestSDKVersionInfo(void) {
         uint64_t offset = LCFindSymbolOffset(dyldPath, "__ZN5dyld3L11sVersionMapE");
 #else
         void *result = litehook_find_symbol(dyldBase, "__ZN5dyld3L11sVersionMapE");
-        uint64_t offset = (uint64_t)result - (uint64_t)dyldBase;
+        uint64_t offset = result ? (uint64_t)result - (uint64_t)dyldBase : 0;
 #endif
+        if(offset == 0) {
+            NSLog(@"[LC] SDK spoof disabled: dyld version map symbol was not found");
+            return false;
+        }
         versionMapPtr = dyldBase + offset;
         saveCachedSymbol(@"__ZN5dyld3L11sVersionMapE", dyldBase, offset);
     }
