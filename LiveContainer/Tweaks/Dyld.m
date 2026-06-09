@@ -579,7 +579,7 @@ bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** or
         return false;
     }
     void* originalFunction = NULL;
-    if(!LCReadPointer(vtableFunctionPtr, &originalFunction) || !LCAddressHasProtection(originalFunction, sizeof(uint32_t), VM_PROT_EXEC)) {
+    if(!LCReadPointer(vtableFunctionPtr, &originalFunction) || !LCAddressHasProtection(originalFunction, sizeof(uint32_t), VM_PROT_EXECUTE)) {
         NSLog(@"[LC] dyld hook skipped: %s resolved vtable entry is not executable", functionName);
         return false;
     }
