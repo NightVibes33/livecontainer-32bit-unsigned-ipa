@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <mach/mach_vm.h>
 #import "../../litehook/src/litehook.h"
 #import "LCMachOUtils.h"
 #include "mach_excServer.h"
@@ -201,8 +202,66 @@ uint32_t hook_dyld_get_program_sdk_version(void* dyldApiInstancePtr) {
 }
 
 
+static bool LCAddressHasProtection(const void* address, size_t length, vm_prot_t protection) {
+    if(!address || length == 0) {
+        return false;
+    }
+    mach_vm_address_t region = (mach_vm_address_t)address;
+    mach_vm_size_t regionSize = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t objectName = MACH_PORT_NULL;
+    kern_return_t ret = mach_vm_region(mach_task_self(), &region, &regionSize, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &infoCount, &objectName);
+    if(objectName != MACH_PORT_NULL) {
+        mach_port_deallocate(mach_task_self(), objectName);
+    }
+    if(ret != KERN_SUCCESS || !(info.protection & protection)) {
+        return false;
+    }
+    uintptr_t ptr = (uintptr_t)address;
+    uintptr_t start = (uintptr_t)region;
+    uintptr_t end = start + (uintptr_t)regionSize;
+    return ptr >= start && ptr <= end && length <= end - ptr;
+}
+
+static bool LCReadPointer(const void* address, void** value) {
+    if(!LCAddressHasProtection(address, sizeof(void*), VM_PROT_READ)) {
+        return false;
+    }
+    void* pointer = *(void* const*)address;
+    if(!pointer) {
+        return false;
+    }
+    *value = pointer;
+    return true;
+}
+
 static bool LCIsAdrp(uint32_t instruction) {
     return (instruction & 0x9f000000) == 0x90000000;
+}
+
+static uint32_t LCInstructionRd(uint32_t instruction) {
+    return instruction & 0x1F;
+}
+
+static uint32_t LCInstructionRn(uint32_t instruction) {
+    return (instruction >> 5) & 0x1F;
+}
+
+static bool LCIsBranchImmediate(uint32_t instruction) {
+    return (instruction & 0xFC000000) == 0x14000000;
+}
+
+static bool LCIsBranchRegister(uint32_t instruction) {
+    return (instruction & 0xFFFFFC1F) == 0xD61F0000;
+}
+
+static uint32_t* LCBranchImmediateTarget(uint32_t* pc, uint32_t instruction) {
+    int32_t imm26 = instruction & 0x03FFFFFF;
+    if(imm26 & 0x02000000) {
+        imm26 |= ~0x03FFFFFF;
+    }
+    return (uint32_t*)((uint8_t*)pc + (((intptr_t)imm26) << 2));
 }
 
 static bool LCIsArm64eMovImmediate(uint32_t instruction) {
@@ -214,7 +273,24 @@ static bool LCIsArm64eLdrPreIndex64(uint32_t instruction) {
 }
 
 static bool LCIsLdrUnsignedImmediate(uint32_t instruction) {
-    return (instruction & 0xBFC00000) == 0xB9400000;
+    return (instruction & 0xFFC00000) == 0xF9400000;
+}
+
+static bool LCIsLdrLiteral64(uint32_t instruction) {
+    return (instruction & 0xFF000000) == 0x58000000;
+}
+
+static uintptr_t LCLdrUnsignedImmediateOffset(uint32_t instruction) {
+    uint32_t size = (instruction & 0xC0000000) >> 30;
+    return ((instruction & 0x3FFC00) >> 10) << size;
+}
+
+static void* LCLdrLiteralAddress(uint32_t* pc, uint32_t instruction) {
+    int32_t imm19 = (instruction >> 5) & 0x7FFFF;
+    if(imm19 & 0x40000) {
+        imm19 |= ~0x7FFFF;
+    }
+    return (void*)((uint8_t*)pc + (((intptr_t)imm19) << 2));
 }
 
 static bool LCIsReasonableDyldVtableOffset(uintptr_t offset) {
@@ -222,7 +298,7 @@ static bool LCIsReasonableDyldVtableOffset(uintptr_t offset) {
 }
 
 static bool LCFindDyldApiVtableOffset(uint32_t* baseAddr, uint32_t adrpOffset, uintptr_t* vtableOffset) {
-    for(uint32_t offset = adrpOffset + 3; offset < adrpOffset + 20; ++offset) {
+    for(uint32_t offset = adrpOffset + 2; offset < adrpOffset + 24; ++offset) {
         uint32_t instruction = baseAddr[offset];
         if(LCIsArm64eMovImmediate(instruction)) {
             uintptr_t imm16 = (instruction & 0x1FFFE0) >> 5;
@@ -242,18 +318,42 @@ static bool LCFindDyldApiVtableOffset(uint32_t* baseAddr, uint32_t adrpOffset, u
                 return true;
             }
         }
+
+        if(LCIsLdrUnsignedImmediate(instruction)) {
+            uintptr_t candidateOffset = LCLdrUnsignedImmediateOffset(instruction);
+            if(LCIsReasonableDyldVtableOffset(candidateOffset)) {
+                *vtableOffset = candidateOffset;
+                return true;
+            }
+        }
     }
 
-    for(uint32_t offset = adrpOffset + 2; offset < adrpOffset + 20; ++offset) {
+    return false;
+}
+
+static bool LCFindDyldApiObjectStorage(uint32_t* baseAddr, uint32_t adrpOffset, void** objectStorage) {
+    uint32_t* adrpInstPtr = baseAddr + adrpOffset;
+    if(!LCAddressHasProtection(adrpInstPtr, sizeof(uint32_t) * 8, VM_PROT_READ) || !LCIsAdrp(*adrpInstPtr)) {
+        return false;
+    }
+
+    uint32_t adrpReg = LCInstructionRd(*adrpInstPtr);
+    uintptr_t address = aarch64_emulate_adrp(*adrpInstPtr, (uint64_t)adrpInstPtr);
+    if(!address) {
+        return false;
+    }
+
+    for(uint32_t offset = adrpOffset + 1; offset < adrpOffset + 10; ++offset) {
         uint32_t instruction = baseAddr[offset];
-        if(!LCIsLdrUnsignedImmediate(instruction)) {
+        uint32_t dst = 0;
+        uint32_t src = 0;
+        uint32_t imm = 0;
+        if(aarch64_emulate_add_imm(instruction, &dst, &src, &imm) && dst == adrpReg && src == adrpReg) {
+            address += imm;
             continue;
         }
-
-        uint32_t size = (instruction & 0xC0000000) >> 30;
-        uintptr_t candidateOffset = ((instruction & 0x3FFC00) >> 10) << size;
-        if(LCIsReasonableDyldVtableOffset(candidateOffset)) {
-            *vtableOffset = candidateOffset;
+        if(LCIsLdrUnsignedImmediate(instruction) && LCInstructionRn(instruction) == adrpReg) {
+            *objectStorage = (void*)(address + LCLdrUnsignedImmediateOffset(instruction));
             return true;
         }
     }
@@ -261,47 +361,152 @@ static bool LCFindDyldApiVtableOffset(uint32_t* baseAddr, uint32_t adrpOffset, u
     return false;
 }
 
-static bool LCTryFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t adrpOffset, void*** vtableFunctionPtr) {
-    uint32_t* adrpInstPtr = baseAddr + adrpOffset;
-    if(!LCIsAdrp(*adrpInstPtr)) {
+static bool LCBuildVtableFunctionPtrFromObject(void* objectPtr, uintptr_t vtableOffset, void*** vtableFunctionPtr) {
+    void* vtablePtr = NULL;
+    if(!LCReadPointer(objectPtr, &vtablePtr)) {
         return false;
     }
-
-    uintptr_t vtableOffset = 0;
-    if(!LCFindDyldApiVtableOffset(baseAddr, adrpOffset, &vtableOffset)) {
+    void** candidate = (void**)((uint8_t*)vtablePtr + vtableOffset);
+    if(!LCAddressHasProtection(candidate, sizeof(void*), VM_PROT_READ)) {
         return false;
     }
-
-    void* gdyldPtr = (void*)aarch64_emulate_adrp_ldr(*adrpInstPtr, *(baseAddr + adrpOffset + 1), (uint64_t)(baseAddr + adrpOffset));
-    if(!gdyldPtr || !*(void**)gdyldPtr) {
-        return false;
-    }
-
-    void* vtablePtr = **(void***)gdyldPtr;
-    if(!vtablePtr) {
-        return false;
-    }
-
-    *vtableFunctionPtr = (void**)((uint8_t*)vtablePtr + vtableOffset);
+    *vtableFunctionPtr = candidate;
     return true;
 }
 
+static bool LCBuildVtableFunctionPtrFromStorage(void* objectStorage, uintptr_t vtableOffset, void*** vtableFunctionPtr) {
+    void* objectPtr = NULL;
+    if(!LCReadPointer(objectStorage, &objectPtr)) {
+        return false;
+    }
+    return LCBuildVtableFunctionPtrFromObject(objectPtr, vtableOffset, vtableFunctionPtr);
+}
+
+static bool LCFindDyldApiObjectLiteral(uint32_t* baseAddr, uint32_t offset, void** objectPtr) {
+    uint32_t* instPtr = baseAddr + offset;
+    if(!LCAddressHasProtection(instPtr, sizeof(uint32_t), VM_PROT_READ) || !LCIsLdrLiteral64(*instPtr)) {
+        return false;
+    }
+    void* literalAddress = LCLdrLiteralAddress(instPtr, *instPtr);
+    return LCReadPointer(literalAddress, objectPtr);
+}
+
+static bool LCTryFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t offset, void*** vtableFunctionPtr) {
+    uintptr_t vtableOffset = 0;
+    if(!LCFindDyldApiVtableOffset(baseAddr, offset, &vtableOffset)) {
+        return false;
+    }
+
+    void* objectStorage = NULL;
+    if(LCFindDyldApiObjectStorage(baseAddr, offset, &objectStorage) && LCBuildVtableFunctionPtrFromStorage(objectStorage, vtableOffset, vtableFunctionPtr)) {
+        return true;
+    }
+
+    void* literalObjectPtr = NULL;
+    if(LCFindDyldApiObjectLiteral(baseAddr, offset, &literalObjectPtr) && LCBuildVtableFunctionPtrFromObject(literalObjectPtr, vtableOffset, vtableFunctionPtr)) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool LCTryResolveRegisterBranchStub(uint32_t* baseAddr, uint32_t** target) {
+    if(!LCAddressHasProtection(baseAddr, sizeof(uint32_t) * 8, VM_PROT_READ)) {
+        return false;
+    }
+    for(uint32_t offset = 0; offset < 4; ++offset) {
+        uint32_t adrpInst = baseAddr[offset];
+        if(!LCIsAdrp(adrpInst)) {
+            continue;
+        }
+        uint32_t reg = LCInstructionRd(adrpInst);
+        uintptr_t address = aarch64_emulate_adrp(adrpInst, (uint64_t)(baseAddr + offset));
+        if(!address) {
+            continue;
+        }
+        for(uint32_t i = offset + 1; i < offset + 7; ++i) {
+            uint32_t instruction = baseAddr[i];
+            uint32_t dst = 0;
+            uint32_t src = 0;
+            uint32_t imm = 0;
+            if(aarch64_emulate_add_imm(instruction, &dst, &src, &imm) && dst == reg && src == reg) {
+                address += imm;
+                continue;
+            }
+            if(LCIsLdrUnsignedImmediate(instruction) && LCInstructionRn(instruction) == reg && LCInstructionRd(instruction) == reg) {
+                void* resolved = NULL;
+                if(!LCReadPointer((void*)(address + LCLdrUnsignedImmediateOffset(instruction)), &resolved)) {
+                    return false;
+                }
+                address = (uintptr_t)resolved;
+                continue;
+            }
+            if(LCIsBranchRegister(instruction) && LCInstructionRn(instruction) == reg) {
+                uint32_t* candidate = (uint32_t*)address;
+                if(LCAddressHasProtection(candidate, sizeof(uint32_t), VM_PROT_READ)) {
+                    *target = candidate;
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
+static uint32_t* LCResolveDyldThunkStart(uint32_t* baseAddr) {
+    uint32_t* current = baseAddr;
+    for(uint32_t depth = 0; depth < 4; ++depth) {
+        if(!LCAddressHasProtection(current, sizeof(uint32_t) * 8, VM_PROT_READ)) {
+            break;
+        }
+
+        uint32_t* target = NULL;
+        if(LCTryResolveRegisterBranchStub(current, &target)) {
+            current = target;
+            continue;
+        }
+
+        bool followedBranch = false;
+        for(uint32_t offset = 0; offset < 4; ++offset) {
+            uint32_t instruction = current[offset];
+            if(LCIsBranchImmediate(instruction)) {
+                target = LCBranchImmediateTarget(current + offset, instruction);
+                if(LCAddressHasProtection(target, sizeof(uint32_t), VM_PROT_READ)) {
+                    current = target;
+                    followedBranch = true;
+                }
+                break;
+            }
+        }
+        if(!followedBranch) {
+            break;
+        }
+    }
+    return current;
+}
+
 static bool LCFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t preferredAdrpOffset, void*** vtableFunctionPtr, uint32_t* matchedAdrpOffset) {
-    if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, preferredAdrpOffset, vtableFunctionPtr)) {
+    uint32_t* resolvedBaseAddr = LCResolveDyldThunkStart(baseAddr);
+    if(resolvedBaseAddr != baseAddr) {
+        NSLog(@"[LC] dyld hook followed API stub from %p to %p", baseAddr, resolvedBaseAddr);
+    }
+
+    if(LCTryFindDyldApiVtableFunctionPtr(resolvedBaseAddr, preferredAdrpOffset, vtableFunctionPtr)) {
         *matchedAdrpOffset = preferredAdrpOffset;
         return true;
     }
 
-    if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, preferredAdrpOffset + 20, vtableFunctionPtr)) {
+    if(LCTryFindDyldApiVtableFunctionPtr(resolvedBaseAddr, preferredAdrpOffset + 20, vtableFunctionPtr)) {
         *matchedAdrpOffset = preferredAdrpOffset + 20;
         return true;
     }
 
-    for(uint32_t offset = 0; offset < 96; ++offset) {
+    for(uint32_t offset = 0; offset < 128; ++offset) {
         if(offset == preferredAdrpOffset || offset == preferredAdrpOffset + 20) {
             continue;
         }
-        if(LCTryFindDyldApiVtableFunctionPtr(baseAddr, offset, vtableFunctionPtr)) {
+        if(LCTryFindDyldApiVtableFunctionPtr(resolvedBaseAddr, offset, vtableFunctionPtr)) {
             *matchedAdrpOffset = offset;
             return true;
         }
