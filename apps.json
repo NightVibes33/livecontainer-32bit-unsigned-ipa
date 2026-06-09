@@ -17,12 +17,12 @@
       "iconURL": "https://raw.githubusercontent.com/NightVibes33/livecontainer-32bit-unsigned-ipa/main/screenshots/AppIcon1024.png",
       "tintColor": "#0784FC",
       "category": "utilities",
-      "version": "3.7.11",
-      "buildVersion": "24",
-      "versionDate": "2026-06-08",
-      "versionDescription": "Automated unsigned real-device build for SideStore and AltStore.\nIncludes bundled LiveExec32.app for the experimental 32-bit IPA translation path.\nRequires a configured JIT provider such as StikDebug for 32-bit launches.\nBuild commit: 724c05a (https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/actions/runs/27173242267).",
+      "version": "3.7.12",
+      "buildVersion": "26",
+      "versionDate": "2026-06-09",
+      "versionDescription": "Automated unsigned real-device build for SideStore and AltStore.\nIncludes bundled LiveExec32.app for the experimental 32-bit IPA translation path.\nRequires a configured JIT provider such as StikDebug for 32-bit launches.\nBuild commit: b048cff (https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/actions/runs/27175271492).",
       "downloadURL": "https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/unsigned-latest/LiveContainer-unsigned.ipa",
-      "size": 6913051,
+      "size": 6917458,
       "screenshotURLs": [
         "https://raw.githubusercontent.com/NightVibes33/livecontainer-32bit-unsigned-ipa/main/screenshots/1.png"
       ],
@@ -79,12 +79,12 @@
       },
       "versions": [
         {
-          "version": "3.7.11",
-          "buildVersion": "24",
-          "date": "2026-06-08T23:24:58Z",
-          "localizedDescription": "Automated unsigned real-device build for SideStore and AltStore.\nIncludes bundled LiveExec32.app for the experimental 32-bit IPA translation path.\nRequires a configured JIT provider such as StikDebug for 32-bit launches.\nBuild commit: 724c05a (https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/actions/runs/27173242267).",
+          "version": "3.7.12",
+          "buildVersion": "26",
+          "date": "2026-06-09T00:14:29Z",
+          "localizedDescription": "Automated unsigned real-device build for SideStore and AltStore.\nIncludes bundled LiveExec32.app for the experimental 32-bit IPA translation path.\nRequires a configured JIT provider such as StikDebug for 32-bit launches.\nBuild commit: b048cff (https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/actions/runs/27175271492).",
           "downloadURL": "https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/download/unsigned-latest/LiveContainer-unsigned.ipa",
-          "size": 6913051,
+          "size": 6917458,
           "minOSVersion": "15.0"
         }
       ]
@@ -94,12 +94,12 @@
     {
       "appID": "com.nightvibes33.livecontainer32",
       "caption": "Unsigned IPA auto-release updated.",
-      "date": "2026-06-08T23:24:58Z",
-      "identifier": "unsigned-24",
+      "date": "2026-06-09T00:14:29Z",
+      "identifier": "unsigned-26",
       "imageURL": "https://raw.githubusercontent.com/NightVibes33/livecontainer-32bit-unsigned-ipa/main/screenshots/release.png",
       "notify": false,
       "tintColor": "#0784FC",
-      "title": "LiveContainer 3.7.11 build 24",
+      "title": "LiveContainer 3.7.12 build 26",
       "url": "https://github.com/NightVibes33/livecontainer-32bit-unsigned-ipa/releases/tag/unsigned-latest"
     }
   ]
