@@ -8,7 +8,6 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#include <mach/mach_vm.h>
 #import "../../litehook/src/litehook.h"
 #import "LCMachOUtils.h"
 #include "mach_excServer.h"
@@ -206,12 +205,12 @@ static bool LCAddressHasProtection(const void* address, size_t length, vm_prot_t
     if(!address || length == 0) {
         return false;
     }
-    mach_vm_address_t region = (mach_vm_address_t)address;
-    mach_vm_size_t regionSize = 0;
+    vm_address_t region = (vm_address_t)address;
+    vm_size_t regionSize = 0;
     vm_region_basic_info_data_64_t info;
     mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t objectName = MACH_PORT_NULL;
-    kern_return_t ret = mach_vm_region(mach_task_self(), &region, &regionSize, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &infoCount, &objectName);
+    kern_return_t ret = vm_region_64(mach_task_self(), &region, &regionSize, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &infoCount, &objectName);
     if(objectName != MACH_PORT_NULL) {
         mach_port_deallocate(mach_task_self(), objectName);
     }
