@@ -235,6 +235,20 @@ static bool LCReadPointer(const void* address, void** value) {
     return true;
 }
 
+static bool LCShouldSkipDyldApiHook(const char* functionName) {
+#if !TARGET_OS_SIMULATOR
+    if(!functionName || getenv("LC_ENABLE_IOS27_PRIVATE_DYLD_API_HOOKS")) {
+        return false;
+    }
+    NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
+    if(version.majorVersion >= 27 && !strcmp(functionName, "_NSGetExecutablePath")) {
+        NSLog(@"[LC] dyld hook skipped: %s is disabled on iOS %ld.%ld fallback path", functionName, (long)version.majorVersion, (long)version.minorVersion);
+        return true;
+    }
+#endif
+    return false;
+}
+
 static bool LCIsAdrp(uint32_t instruction) {
     return (instruction & 0x9f000000) == 0x90000000;
 }
@@ -515,6 +529,9 @@ static bool LCFindDyldApiVtableFunctionPtr(uint32_t* baseAddr, uint32_t preferre
 }
 
 bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** origFunction, void* hookFunction) {
+    if(LCShouldSkipDyldApiHook(functionName)) {
+        return false;
+    }
     
     uint32_t* baseAddr = dlsym(RTLD_DEFAULT, functionName);
     if(!baseAddr) {
@@ -561,6 +578,11 @@ bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** or
         NSLog(@"[LC] dyld hook skipped: %s vtable function pointer was not found", functionName);
         return false;
     }
+    void* originalFunction = NULL;
+    if(!LCReadPointer(vtableFunctionPtr, &originalFunction) || !LCAddressHasProtection(originalFunction, sizeof(uint32_t), VM_PROT_EXEC)) {
+        NSLog(@"[LC] dyld hook skipped: %s resolved vtable entry is not executable", functionName);
+        return false;
+    }
     kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)vtableFunctionPtr, sizeof(uintptr_t), false, PROT_READ | PROT_WRITE | VM_PROT_COPY);
     if(ret != KERN_SUCCESS) {
         if(!os_tpro_is_supported()) {
@@ -569,7 +591,7 @@ bool performHookDyldApi(const char* functionName, uint32_t adrpOffset, void** or
         }
         os_thread_self_restrict_tpro_to_rw();
     }
-    *origFunction = (void*)*(void**)vtableFunctionPtr;
+    *origFunction = originalFunction;
     *(uint64_t*)vtableFunctionPtr = (uint64_t)hookFunction;
     builtin_vm_protect(mach_task_self(), (mach_vm_address_t)vtableFunctionPtr, sizeof(uintptr_t), false, PROT_READ);
     if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
