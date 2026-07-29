@@ -1,0 +1,81 @@
+name: One-time merge repair
+
+on:
+  push:
+    branches:
+      - sync/upstream-2026-07-29
+    paths:
+      - .github/workflows/fix-sync-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: sync/upstream-2026-07-29
+          fetch-depth: 0
+
+      - name: Repair merged CFBundle scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('LiveContainer/LCBootstrap.m')
+          text = path.read_text()
+          start = text.index('bool overwriteMainCFBundle(void) {')
+          end = text.index('bool overwriteMainNSBundle(NSBundle *newBundle) {', start)
+          replacement = r'''bool overwriteMainCFBundle(void) {
+              // Overwrite CFBundleGetMainBundle
+              uint32_t *pc = (uint32_t *)CFBundleGetMainBundle;
+              void **mainBundleAddr = 0;
+
+          #if !TARGET_OS_SIMULATOR
+              if(@available(iOS 27.0, *)) {
+                  // iOS 27 inverted this logic; __mainBundle follows the first tbz.
+                  for(int i = 0; i < 128; ++i) {
+                      bool isTbz = ((*pc) & 0x7F000000) == 0x36000000;
+                      if(isTbz) {
+                          mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)(pc+1), (uint64_t)(pc-1));
+                          break;
+                      }
+                      ++pc;
+                  }
+              } else {
+          #endif
+                  for(int i = 0; i < 128; ++i) {
+                      uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
+                      if(addr) {
+                          mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
+                          break;
+                      }
+                      ++pc;
+                  }
+          #if !TARGET_OS_SIMULATOR
+              }
+          #endif
+
+              if(!mainBundleAddr) {
+                  NSLog(@"[LCBootstrap] CFBundleGetMainBundle layout changed; skipping main CFBundle overwrite");
+                  return false;
+              }
+              *mainBundleAddr = (__bridge void *)NSBundle.mainBundle._cfBundle;
+              return true;
+          }
+
+          '''
+          path.write_text(text[:start] + replacement + text[end:])
+          PY
+
+          git diff --check
+          grep -q 'iOS 27 inverted this logic' LiveContainer/LCBootstrap.m
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add LiveContainer/LCBootstrap.m
+          git commit -m "Repair merged iOS 27 CFBundle scanner"
+          git push origin HEAD:sync/upstream-2026-07-29
