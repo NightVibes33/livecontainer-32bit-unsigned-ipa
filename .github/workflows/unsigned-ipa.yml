@@ -44,26 +44,26 @@ jobs:
           path = Path('LiveContainerSwiftUI/Models/LCAppInfo.m')
           text = path.read_text()
           old = '''                if(needPatch) {
-                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                        info[@"LCTweakLoaderCantInject"] = @YES;
-                        info[@"dontInjectTweakLoader"] = @YES;
-                    }
-                }
-                if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                    info[@"segCountMismatch"] = @YES;
-                }
+                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                         info[@"LCTweakLoaderCantInject"] = @YES;
+                         info[@"dontInjectTweakLoader"] = @YES;
+                     }
+                 }
+                 if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                     info[@"segCountMismatch"] = @YES;
+                 }
 '''
           new = '''                if(needPatch) {
-                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                        info[@"LCTweakLoaderCantInject"] = @YES;
-                        info[@"dontInjectTweakLoader"] = @YES;
-                    }
-                    if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                        info[@"segCountMismatch"] = @YES;
-                    }
-                }
+                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                         info[@"LCTweakLoaderCantInject"] = @YES;
+                         info[@"dontInjectTweakLoader"] = @YES;
+                     }
+                     if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                         info[@"segCountMismatch"] = @YES;
+                     }
+                 }
 '''
           if old in text:
               path.write_text(text.replace(old, new, 1))
