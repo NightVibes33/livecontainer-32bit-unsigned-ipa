@@ -206,25 +206,23 @@ bool overwriteMainCFBundle(void) {
     // Overwrite CFBundleGetMainBundle
     uint32_t *pc = (uint32_t *)CFBundleGetMainBundle;
     void **mainBundleAddr = 0;
-    for (int i = 0; i < 128; ++i) {
-        uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
-        if (addr) {
-            // adrp <- pc-1
-            // tbnz <- pc
-            // ...
-            // ldr  <- addr
-            mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
-            break;
+
+#if !TARGET_OS_SIMULATOR
+    if(@available(iOS 27.0, *)) {
+        // iOS 27 inverted this logic; __mainBundle follows the first tbz.
+        for(int i = 0; i < 128; ++i) {
+            bool isTbz = ((*pc) & 0x7F000000) == 0x36000000;
+            if(isTbz) {
+                mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)(pc+1), (uint64_t)(pc-1));
+                break;
+            }
+            ++pc;
         }
     } else {
 #endif
-        while (true) {
+        for(int i = 0; i < 128; ++i) {
             uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
-            if (addr) {
-                // adrp <- pc-1
-                // tbnz <- pc
-                // ...
-                // ldr  <- addr
+            if(addr) {
                 mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
                 break;
             }
@@ -232,6 +230,8 @@ bool overwriteMainCFBundle(void) {
         }
 #if !TARGET_OS_SIMULATOR
     }
+#endif
+
     if(!mainBundleAddr) {
         NSLog(@"[LCBootstrap] CFBundleGetMainBundle layout changed; skipping main CFBundle overwrite");
         return false;
