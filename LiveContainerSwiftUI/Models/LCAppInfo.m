@@ -260,7 +260,7 @@
         @"IgnoreManifestScope": @YES,
         @"IsRemovable": @YES,
         @"Label": self.displayName,
-        @"PayloadDescription": [NSString stringWithFormat:@"Web Clip for launching %@ (%@) in LiveContainer", self.displayName, self.bundlePath.lastPathComponent],
+        @"PayloadDescription": [NSString stringWithFormat:@"This profile installs a web clip which opens %@ (%@) in LiveContainer", self.displayName, self.bundlePath.lastPathComponent],
         @"PayloadDisplayName": self.displayName,
         @"PayloadIdentifier": self.bundleIdentifier,
         @"PayloadType": @"com.apple.webClip.managed",
@@ -337,9 +337,9 @@
                         info[@"LCTweakLoaderCantInject"] = @YES;
                         info[@"dontInjectTweakLoader"] = @YES;
                     }
-                }
-                if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                    info[@"segCountMismatch"] = @YES;
+                    if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                        info[@"segCountMismatch"] = @YES;
+                    }
                 }
             }
             isEncrypted |= LCIsMachOEncrypted(header);
