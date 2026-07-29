@@ -1,5 +1,6 @@
 name: One-time LCAppInfo repair
 
+# Existing workflow touched once to trigger the repair job.
 on:
   push:
     branches:
