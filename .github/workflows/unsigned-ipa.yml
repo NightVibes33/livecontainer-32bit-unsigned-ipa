@@ -29,54 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-          fetch-depth: 0
           submodules: recursive
-
-      - name: Repair upstream merge artifacts
-        if: github.event_name == 'pull_request' && github.head_ref == 'sync/upstream-2026-07-29'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('LiveContainerSwiftUI/Models/LCAppInfo.m')
-          text = path.read_text()
-          old = '''                if(needPatch) {
-                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                         info[@"LCTweakLoaderCantInject"] = @YES;
-                         info[@"dontInjectTweakLoader"] = @YES;
-                     }
-                 }
-                 if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                     info[@"segCountMismatch"] = @YES;
-                 }
-'''
-          new = '''                if(needPatch) {
-                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                         info[@"LCTweakLoaderCantInject"] = @YES;
-                         info[@"dontInjectTweakLoader"] = @YES;
-                     }
-                     if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                         info[@"segCountMismatch"] = @YES;
-                     }
-                 }
-'''
-          if old in text:
-              path.write_text(text.replace(old, new, 1))
-          PY
-
-          if ! git diff --quiet -- LiveContainerSwiftUI/Models/LCAppInfo.m; then
-            git diff --check
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add LiveContainerSwiftUI/Models/LCAppInfo.m
-            git commit -m "Repair merged patchResult scope"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
 
       - name: Checkout LiveExec32
         uses: actions/checkout@v6
