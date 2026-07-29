@@ -29,7 +29,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Repair upstream merge artifacts
+        if: github.event_name == 'pull_request' && github.head_ref == 'sync/upstream-2026-07-29'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('LiveContainerSwiftUI/Models/LCAppInfo.m')
+          text = path.read_text()
+          old = '''                if(needPatch) {
+                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                        info[@"LCTweakLoaderCantInject"] = @YES;
+                        info[@"dontInjectTweakLoader"] = @YES;
+                    }
+                }
+                if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                    info[@"segCountMismatch"] = @YES;
+                }
+'''
+          new = '''                if(needPatch) {
+                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                        info[@"LCTweakLoaderCantInject"] = @YES;
+                        info[@"dontInjectTweakLoader"] = @YES;
+                    }
+                    if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                        info[@"segCountMismatch"] = @YES;
+                    }
+                }
+'''
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          PY
+
+          if ! git diff --quiet -- LiveContainerSwiftUI/Models/LCAppInfo.m; then
+            git diff --check
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add LiveContainerSwiftUI/Models/LCAppInfo.m
+            git commit -m "Repair merged patchResult scope"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
 
       - name: Checkout LiveExec32
         uses: actions/checkout@v6
@@ -129,11 +176,11 @@ jobs:
           MAIN_ENTITLEMENTS="$RUNNER_TEMP/LiveContainer-ad-hoc-entitlements.plist"
           LIVEPROCESS_ENTITLEMENTS="$RUNNER_TEMP/LiveProcess-ad-hoc-entitlements.plist"
           LAUNCH_ENTITLEMENTS="$RUNNER_TEMP/LaunchAppExtension-ad-hoc-entitlements.plist"
-          LAUNCH_HELPER_ENTITLEMENTS="$RUNNER_TEMP/LaunchAppExtensionHelper-ad-hoc-entitlements.plist"
+          SHARE_ENTITLEMENTS="$RUNNER_TEMP/ShareExtension-ad-hoc-entitlements.plist"
           make_entitlements entitlements.xml "$MAIN_ENTITLEMENTS" "$BUNDLE_ID"
           make_entitlements LiveProcess/LiveProcess.entitlements "$LIVEPROCESS_ENTITLEMENTS" "$BUNDLE_ID.LiveProcess"
           make_entitlements LaunchAppExtension/LaunchAppExtension.entitlements "$LAUNCH_ENTITLEMENTS" "$BUNDLE_ID.LaunchAppExtension"
-          make_entitlements LaunchAppExtensionHelper/LaunchAppExtensionHelper.entitlements "$LAUNCH_HELPER_ENTITLEMENTS" "$BUNDLE_ID.LaunchAppExtensionHelper"
+          make_entitlements ShareExtension/ShareExtension.entitlements "$SHARE_ENTITLEMENTS" "$BUNDLE_ID.ShareExtension"
           find "$APP_PATH" -type f \( -name '*.dylib' -o -name '*.so' \) -print | while IFS= read -r binary; do
             codesign --force --sign - --timestamp=none "$binary"
           done
@@ -148,7 +195,7 @@ jobs:
               case "$(basename "$appex")" in
                 LiveProcess.appex) appex_entitlements="$LIVEPROCESS_ENTITLEMENTS" ;;
                 LaunchAppExtension.appex) appex_entitlements="$LAUNCH_ENTITLEMENTS" ;;
-                LaunchAppExtensionHelper.appex) appex_entitlements="$LAUNCH_HELPER_ENTITLEMENTS" ;;
+                ShareExtension.appex) appex_entitlements="$SHARE_ENTITLEMENTS" ;;
                 *) appex_entitlements= ;;
               esac
               if [ -n "${appex_entitlements:-}" ]; then
@@ -174,6 +221,7 @@ jobs:
           test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/LiveExec32
           test -d ipa-check/Payload/LiveContainer.app/_CodeSignature
           test ! -e ipa-check/Payload/LiveContainer.app/embedded.mobileprovision
+          test -d ipa-check/Payload/LiveContainer.app/PlugIns/ShareExtension.appex
           codesign -d --entitlements :- ipa-check/Payload/LiveContainer.app > ipa-check-entitlements.plist
           grep -q 'group.com.SideStore.SideStore' ipa-check-entitlements.plist
           grep -q 'group.com.rileytestut.AltStore' ipa-check-entitlements.plist
