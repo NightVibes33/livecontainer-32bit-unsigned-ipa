@@ -1,5 +1,6 @@
 name: Repair sync branch
 
+# Triggered after the workflow existed on the default branch.
 on:
   push:
     branches:
