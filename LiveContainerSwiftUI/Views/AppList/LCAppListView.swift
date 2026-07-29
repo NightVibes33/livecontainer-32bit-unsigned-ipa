@@ -82,6 +82,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
     
     @AppStorage("LCMultitaskMode", store: LCUtils.appGroupUserDefault) var multitaskMode: MultitaskMode = .virtualWindow
+    @AppStorage("darkModeIcon", store: LCUtils.appGroupUserDefault) private var darkModeIcon = false
     
     @State private var isViewAppeared = false
     
@@ -243,16 +244,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                         Button {
                             LCUtils.openSideStore(delegate: self)
                         } label: {
-                            Image("SideStoreBadge")
-                                .resizable()
-                                .renderingMode(.template)
-                                .foregroundColor({
-                                    if SharedModel.isLiquidGlassEnabled {
-                                        return Color.primary
-                                    } else {
-                                        return Color.accentColor
-                                    }
-                                }())
+                            IconImageView(icon: BuiltInSideStoreAppInfo.shared.iconIsDarkIcon(darkModeIcon))
                                 .frame(width: UIFont.preferredFont(forTextStyle: .body).lineHeight, height: UIFont.preferredFont(forTextStyle: .body).lineHeight)
 
                         }
@@ -426,6 +418,19 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             guard sharedModel.selectedTab == .apps, let link else { return }
             sharedModel.deepLink = nil
             handleURL(url: link)
+        }
+        .onDrop(of: [.url], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                guard let url else { return }
+                Task {
+                    guard let urlToOpen = await webViewUrlInput.open(initVal: url.absoluteString), urlToOpen != "" else {
+                        return
+                    }
+                    await openWebView(urlString: urlToOpen)
+                }
+            }
+            return true
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.InstallAppNotification)) { obj in
             if let obj2 = obj.object as? [String: Any], let installUrl = obj2["url"] as? URL {
@@ -750,6 +755,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             finalNewApp.lastLaunched = appToReplace.appInfo.lastLaunched
             finalNewApp.jitLaunchScriptJs = appToReplace.appInfo.jitLaunchScriptJs
             finalNewApp.multitaskSpecified = appToReplace.appInfo.multitaskSpecified
+            finalNewApp.classicMode = appToReplace.appInfo.classicMode
             finalNewApp.autoSaveDisabled = false
             finalNewApp.save()
         } else {
@@ -874,7 +880,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             return
         }
         
-        guard let installUrl = URL(string: urlStr) else {
+        guard var installUrl = URL(string: urlStr) else {
             errorInfo = "lc.appList.urlInvalidError".loc
             errorShow = true
             return
@@ -887,21 +893,48 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         
         if installUrl.isFileURL {
             // install from local, we directly call local install method
-            if !installUrl.lastPathComponent.hasSuffix(".ipa") && !installUrl.lastPathComponent.hasSuffix(".tipa") {
+            let fileExtension = installUrl.pathExtension.lowercased()
+            if fileExtension != "ipa" && fileExtension != "tipa" {
                 errorInfo = "lc.appList.urlFileIsNotIpaError".loc
                 errorShow = true
                 return
             }
             
             let fm = FileManager.default
-            if !fm.isReadableFile(atPath: installUrl.path) && !installUrl.startAccessingSecurityScopedResource() {
+            var didStartAccessing = false
+            if !fm.isReadableFile(atPath: installUrl.path),
+               let bookmarkData = LCUtils.appGroupUserDefault.data(forKey: "LCLaunchExtensionFileBookmark") {
+                do {
+                    var isStale = false
+                    let resolvedURL = try URL(
+                        resolvingBookmarkData: bookmarkData,
+                        options: URL.BookmarkResolutionOptions(rawValue: 1 << 10),
+                        relativeTo: nil,
+                        bookmarkDataIsStale: &isStale
+                    )
+                    installUrl = resolvedURL
+                    didStartAccessing = resolvedURL.startAccessingSecurityScopedResource()
+                } catch {
+                    errorInfo =  "Failed to resolve shared IPA bookmark: \(error.localizedDescription)"
+                    errorShow = true
+                    return
+                }
+            }
+
+            if !fm.isReadableFile(atPath: installUrl.path) && !didStartAccessing {
+                didStartAccessing = installUrl.startAccessingSecurityScopedResource()
+            }
+
+            if !fm.isReadableFile(atPath: installUrl.path) && !didStartAccessing {
                 errorInfo = "lc.appList.ipaAccessError".loc
                 errorShow = true
                 return
             }
             
             defer {
-                installUrl.stopAccessingSecurityScopedResource()
+                if didStartAccessing {
+                    installUrl.stopAccessingSecurityScopedResource()
+                }
             }
             
             do {
@@ -916,9 +949,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 var shouldDelete = false
                 if let documentsDirectory = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
                     let inboxURL = documentsDirectory.appendingPathComponent("Inbox")
-                    let fileURL = inboxURL.appendingPathComponent(installUrl.lastPathComponent)
-                    
-                    shouldDelete = fm.fileExists(atPath: fileURL.path)
+                    shouldDelete = installUrl.deletingLastPathComponent().standardizedFileURL == inboxURL.standardizedFileURL
                 }
                 if shouldDelete {
                     try fm.removeItem(at: installUrl)
@@ -987,7 +1018,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
     }
     
-    func launchAppWithBundleId(bundleId : String, container : String?, forceJIT: Bool? = nil) async {
+    func launchAppWithBundleId(bundleId : String, container : String?, urlStr: String? = nil, forceJIT: Bool? = nil) async {
         if bundleId == "" {
             return
         }
@@ -1012,6 +1043,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             }
         }
         
+        if appFound == nil && bundleId == "builtinSideStore" {
+            appFound = LCAppModel(appInfo: BuiltInSideStoreAppInfo.shared)
+        }
+        
         if isFoundAppLocked && !sharedModel.isHiddenAppUnlocked {
             do {
                 let result = try await LCUtils.authenticateUser()
@@ -1031,7 +1066,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
 
         do {
-            try await appFound.runApp(multitask: nil, containerFolderName: container, forceJIT: forceJIT)
+            try await appFound.runApp(multitask: nil, containerFolderName: container, urlStr: urlStr, forceJIT: forceJIT)
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
@@ -1051,17 +1086,17 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         }
     }
     
-    func jitLaunch(appName: String) async {
-        await jitLaunch(withScript: "", appName: appName)
+    func jitLaunch(appName: String, classicMode: UInt) async {
+        await jitLaunch(withScript: "", appName: appName, classicMode: classicMode)
     }
 
-    func jitLaunch(withScript script: String, appName: String) async {
+    func jitLaunch(withScript script: String, appName: String, classicMode: UInt) async {
         await MainActor.run {
             jitLog = ""
         }
         let enableJITTask = Task {
             
-            let _ = await LCUtils.askForJIT(withScript: script, appName: appName) { newMsg in
+            let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
                 Task { await MainActor.run {
                     self.jitLog += "\(newMsg)\n"
                 }}
@@ -1075,7 +1110,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             enableJITTask.cancel()
             return
         }
-        LCSharedUtils.launchToGuestApp()
+        LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
 
     }
     
@@ -1189,6 +1224,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 var bundleId : String? = nil
                 var containerName : String? = nil
                 var forceJIT: Bool? = nil
+                var urlStr: String? = nil
                 for queryItem in components.queryItems ?? [] {
                     if queryItem.name == "bundle-name", let bundleId1 = queryItem.value {
                         bundleId = bundleId1
@@ -1200,10 +1236,15 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                         } else if forceJIT1 == "false" {
                             forceJIT = false
                         }
+                    } else if queryItem.name == "open-url" {
+                        if let decodedData = Data(base64Encoded: queryItem.value ?? ""),
+                           let decodedUrl = String(data: decodedData, encoding: .utf8) {
+                            urlStr = decodedUrl
+                        }
                     }
                 }
                 if let bundleId, bundleId != "ui"{
-                    Task { await launchAppWithBundleId(bundleId: bundleId, container: containerName, forceJIT: forceJIT) }
+                    Task { await launchAppWithBundleId(bundleId: bundleId, container: containerName, urlStr: urlStr, forceJIT: forceJIT) }
                 }
             }
         } else if url.host == "install" {

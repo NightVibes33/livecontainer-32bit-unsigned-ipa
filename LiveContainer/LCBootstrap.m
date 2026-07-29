@@ -216,7 +216,21 @@ bool overwriteMainCFBundle(void) {
             mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
             break;
         }
-        ++pc;
+    } else {
+#endif
+        while (true) {
+            uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
+            if (addr) {
+                // adrp <- pc-1
+                // tbnz <- pc
+                // ...
+                // ldr  <- addr
+                mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
+                break;
+            }
+            ++pc;
+        }
+#if !TARGET_OS_SIMULATOR
     }
     if(!mainBundleAddr) {
         NSLog(@"[LCBootstrap] CFBundleGetMainBundle layout changed; skipping main CFBundle overwrite");
@@ -368,7 +382,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     if (!LCSharedUtils.certificatePassword && !isSideStore) {
 #if !TARGET_OS_SIMULATOR
         if(@available(iOS 26.0 ,*))  {
-            return @"JITLess mode is required since iOS 26. Please set it up in settings.";
+            return @"JITLess mode is required since iOS 26. Please set it up in settings. \nPlease go to LiveContainer settings -> tap \"Import Certificate from SideStore\" / \"Import Certificate\"";
         }
 #endif
         // First of all, let's check if we have JIT
@@ -634,6 +648,9 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         NSFMGuestHooksInit();
         initDead10ccFix();
     }
+    if(isLiveProcess) {
+        NSURLSCGuestHooksInit();
+    }
     // ignore setting handler from guest app
     litehook_rebind_symbol(LITEHOOK_REBIND_GLOBAL, NSSetUncaughtExceptionHandler, hook_do_nothing, nil);
     
@@ -719,7 +736,11 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     
     if([guestAppInfo[@"dontInjectTweakLoader"] boolValue] && ![guestAppInfo[@"dontLoadTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;
-        dlopen("@loader_path/../TweakLoader.dylib", RTLD_LAZY|RTLD_GLOBAL);
+        if([guestAppInfo[@"hideLiveContainer"] boolValue]) {
+            dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"].UTF8String, RTLD_LAZY|RTLD_GLOBAL);
+        } else {
+            dlopen("@loader_path/../TweakLoader.dylib", RTLD_LAZY|RTLD_GLOBAL);
+        }
     }
     
     if(isSideStore) {
@@ -919,7 +940,7 @@ int LiveContainerMain(int argc, char *argv[]) {
         });
 
     }
-    
+    NSSetUncaughtExceptionHandler(&exceptionHandler);
     if (selectedApp || isSideStore) {
         [lcUserDefaults removeObjectForKey:@"selected"];
         [lcUserDefaults removeObjectForKey:@"selectedContainer"];
@@ -927,7 +948,6 @@ int LiveContainerMain(int argc, char *argv[]) {
             lcLaunchURL = launchUrl;
             [lcUserDefaults removeObjectForKey:@"launchAppUrlScheme"];
         }
-        NSSetUncaughtExceptionHandler(&exceptionHandler);
         NSString *appError = invokeAppMain(selectedApp, selectedContainer, argc, argv);
         if (appError) {
             if(isLiveProcess) {
@@ -993,6 +1013,10 @@ int LiveContainerMain(int argc, char *argv[]) {
             tweakFolder = [docPath stringByAppendingPathComponent:@"Tweaks"];
         }
         setenv("LC_GLOBAL_TWEAKS_FOLDER", tweakFolder.UTF8String, 1);
+#if TARGET_OS_MACCATALYST || TARGET_OS_SIMULATOR
+        extern void DyldHookLoadableIntoProcess(void);
+        DyldHookLoadableIntoProcess();
+#endif
         dlopen("@executable_path/Frameworks/TweakLoader.dylib", RTLD_LAZY);
     }
 
