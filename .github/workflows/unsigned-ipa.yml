@@ -1,8 +1,9 @@
-name: Build Unsigned IPA
+name: Repair Upstream Sync
 
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -10,6 +11,7 @@ permissions:
 
 jobs:
   repair-sync-branch:
+    if: github.event_name == 'pull_request' && github.head_ref == 'sync/upstream-2026-07-29'
     name: Repair upstream sync branch
     runs-on: ubuntu-latest
     steps:
@@ -28,35 +30,36 @@ jobs:
           path = Path('LiveContainerSwiftUI/Models/LCAppInfo.m')
           text = path.read_text()
           old = '''                if(needPatch) {
-                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                        info[@"LCTweakLoaderCantInject"] = @YES;
-                        info[@"dontInjectTweakLoader"] = @YES;
-                    }
-                }
-                if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                    info[@"segCountMismatch"] = @YES;
-                }
+                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                         info[@"LCTweakLoaderCantInject"] = @YES;
+                         info[@"dontInjectTweakLoader"] = @YES;
+                     }
+                 }
+                 if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                     info[@"segCountMismatch"] = @YES;
+                 }
 '''
           new = '''                if(needPatch) {
-                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                        info[@"LCTweakLoaderCantInject"] = @YES;
-                        info[@"dontInjectTweakLoader"] = @YES;
-                    }
-                    if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                        info[@"segCountMismatch"] = @YES;
-                    }
-                }
+                     int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                     if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                         info[@"LCTweakLoaderCantInject"] = @YES;
+                         info[@"dontInjectTweakLoader"] = @YES;
+                     }
+                     if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                         info[@"segCountMismatch"] = @YES;
+                     }
+                 }
 '''
           if old not in text:
               raise SystemExit('Expected merged patchResult block was not found')
           path.write_text(text.replace(old, new, 1))
           PY
 
+          rm -f .github/workflows/fix-lcappinfo-once.yml
           git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add LiveContainerSwiftUI/Models/LCAppInfo.m
-          git commit -m "Repair merged patchResult scope"
+          git add -A
+          git commit -m "Repair upstream merge and preserve 32-bit patching"
           git push origin HEAD:sync/upstream-2026-07-29
