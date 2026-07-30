@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -48,6 +49,8 @@ int main() {
     constexpr uint32_t kSysctlLengthAddress = 0x1640u;
     constexpr uint32_t kSysctlOutputAddress = 0x1680u;
     constexpr uint32_t kRlimitAddress = 0x1700u;
+    constexpr uint32_t kDirectoryBufferAddress = 0x2000u;
+    constexpr uint32_t kDirectoryPositionAddress = 0x2f00u;
     constexpr uint32_t kStackAddress = 0x3000u;
 
     constexpr uint32_t kProtRead = 0x01u;
@@ -146,7 +149,7 @@ int main() {
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
     const std::filesystem::path root(rootDirectory);
-    std::filesystem::create_directories(root / "usr/lib");
+    std::filesystem::create_directories(root / "usr/lib/Frameworks");
 
     const std::string payload = "legacy-dylib-bytes";
     {
@@ -171,6 +174,81 @@ int main() {
     const auto readMapped = [&](uint32_t address, void* output, size_t size) {
         assert(syscallMemory.read(address, output, size));
     };
+
+    putCString(kPathAddress, "/usr/lib");
+    state = {};
+    state.r[12] = 5;
+    state.r[0] = kPathAddress;
+    state.r[1] = 0u;
+    const auto directoryOpened = rooted.dispatch(state, 0x80u, false);
+    assert(directoryOpened.handled && directoryOpened.errorNumber == 0);
+    const int directoryFd = static_cast<int>(state.r[0]);
+
+    state = {};
+    state.r[12] = 344;
+    state.r[0] = static_cast<uint32_t>(directoryFd);
+    state.r[1] = kDirectoryBufferAddress;
+    state.r[2] = 8u;
+    state.r[3] = kDirectoryPositionAddress;
+    const auto tinyDirectoryRead = rooted.dispatch(state, 0x80u, false);
+    assert(tinyDirectoryRead.handled && tinyDirectoryRead.errorNumber == EINVAL);
+
+    std::memset(lowMemory.data() + kDirectoryBufferAddress, 0, 1024u);
+    uint64_t directoryPosition = 0;
+    std::memcpy(lowMemory.data() + kDirectoryPositionAddress,
+                &directoryPosition,
+                sizeof(directoryPosition));
+    state = {};
+    state.r[12] = 344;
+    state.r[0] = static_cast<uint32_t>(directoryFd);
+    state.r[1] = kDirectoryBufferAddress;
+    state.r[2] = 1024u;
+    state.r[3] = kDirectoryPositionAddress;
+    const auto directoryRead = rooted.dispatch(state, 0x80u, false);
+    assert(directoryRead.handled && directoryRead.errorNumber == 0);
+    assert(directoryRead.returnValue > 0);
+
+    std::set<std::string> directoryNames;
+    size_t directoryOffset = 0;
+    while (directoryOffset < static_cast<size_t>(directoryRead.returnValue)) {
+        uint16_t recordLength = 0;
+        uint16_t nameLength = 0;
+        std::memcpy(&recordLength,
+                    lowMemory.data() + kDirectoryBufferAddress + directoryOffset + 16u,
+                    sizeof(recordLength));
+        std::memcpy(&nameLength,
+                    lowMemory.data() + kDirectoryBufferAddress + directoryOffset + 18u,
+                    sizeof(nameLength));
+        assert(recordLength >= 24u && (recordLength & 3u) == 0u);
+        assert(directoryOffset + recordLength <=
+               static_cast<size_t>(directoryRead.returnValue));
+        directoryNames.emplace(reinterpret_cast<char*>(
+                                   lowMemory.data() + kDirectoryBufferAddress +
+                                   directoryOffset + 21u),
+                               nameLength);
+        directoryOffset += recordLength;
+    }
+    assert(directoryNames.count(".") == 1u);
+    assert(directoryNames.count("..") == 1u);
+    assert(directoryNames.count("libA.dylib") == 1u);
+    assert(directoryNames.count("libAlias.dylib") == 1u);
+    assert(directoryNames.count("Frameworks") == 1u);
+
+    state = {};
+    state.r[12] = 344;
+    state.r[0] = static_cast<uint32_t>(directoryFd);
+    state.r[1] = kDirectoryBufferAddress;
+    state.r[2] = 1024u;
+    state.r[3] = kDirectoryPositionAddress;
+    const auto directoryEnd = rooted.dispatch(state, 0x80u, false);
+    assert(directoryEnd.handled && directoryEnd.errorNumber == 0);
+    assert(directoryEnd.returnValue == 0);
+
+    state = {};
+    state.r[12] = 6;
+    state.r[0] = static_cast<uint32_t>(directoryFd);
+    const auto directoryClosed = rooted.dispatch(state, 0x80u, false);
+    assert(directoryClosed.handled && directoryClosed.errorNumber == 0);
 
     putCString(kPathAddress, "/usr/lib/libA.dylib");
 

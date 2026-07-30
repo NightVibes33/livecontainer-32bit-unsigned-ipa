@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <dirent.h>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -50,6 +51,7 @@ private:
         int hostFd = -1;
         uint32_t openFlags = 0;
         uint32_t descriptorFlags = 0;
+        DIR* directoryStream = nullptr;
     };
 
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
@@ -61,7 +63,10 @@ private:
     bool resolveGuestPathNoFollow(const std::string& guestPath,
                                    std::string& hostPath,
                                    int& errorNumber) const;
-    int allocateGuestFd(int hostFd, uint32_t openFlags, uint32_t descriptorFlags);
+    int allocateGuestFd(int hostFd,
+                        uint32_t openFlags,
+                        uint32_t descriptorFlags,
+                        DIR* directoryStream = nullptr);
 
     SyscallMemory memory_;
     std::string guestRoot_;

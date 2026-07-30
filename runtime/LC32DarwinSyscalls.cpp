@@ -216,6 +216,9 @@ DarwinSyscalls::DarwinSyscalls(SyscallMemory memory, std::string guestRoot)
 
 DarwinSyscalls::~DarwinSyscalls() {
     for (const auto& entry : guestFiles_) {
+        if (entry.second.directoryStream != nullptr) {
+            ::closedir(entry.second.directoryStream);
+        }
         ::close(entry.second.hostFd);
     }
 }
@@ -383,12 +386,17 @@ bool DarwinSyscalls::resolveGuestPathNoFollow(const std::string& guestPath,
 
 int DarwinSyscalls::allocateGuestFd(int hostFd,
                                     uint32_t openFlags,
-                                    uint32_t descriptorFlags) {
+                                    uint32_t descriptorFlags,
+                                    DIR* directoryStream) {
     for (int attempts = 0; attempts < INT_MAX - 3; ++attempts) {
         if (nextGuestFd_ < 3) nextGuestFd_ = 3;
         const int candidate = nextGuestFd_++;
         if (guestFiles_.find(candidate) == guestFiles_.end()) {
-            guestFiles_.emplace(candidate, GuestFile{hostFd, openFlags, descriptorFlags});
+            guestFiles_.emplace(candidate,
+                                GuestFile{hostFd,
+                                          openFlags,
+                                          descriptorFlags,
+                                          directoryStream});
             return candidate;
         }
     }
@@ -490,10 +498,36 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
 #endif
             const int hostFd = ::open(hostPath.c_str(), hostFlags);
             if (hostFd < 0) return fail(number, errno, "open host call");
+            DIR* directoryStream = nullptr;
+            struct stat openedStat{};
+            if (::fstat(hostFd, &openedStat) != 0) {
+                const int savedError = errno;
+                ::close(hostFd);
+                return fail(number, savedError, "open fstat");
+            }
+            if (S_ISDIR(openedStat.st_mode)) {
+                const int directoryFd = ::dup(hostFd);
+                if (directoryFd < 0) {
+                    const int savedError = errno;
+                    ::close(hostFd);
+                    return fail(number, savedError, "open directory dup");
+                }
+                directoryStream = ::fdopendir(directoryFd);
+                if (directoryStream == nullptr) {
+                    const int savedError = errno;
+                    ::close(directoryFd);
+                    ::close(hostFd);
+                    return fail(number, savedError, "open directory stream");
+                }
+            }
             const uint32_t descriptorFlags =
                 (flags & kGuestOpenCloseExec) != 0 ? kGuestFdCloseExec : 0u;
-            const int guestFd = allocateGuestFd(hostFd, flags, descriptorFlags);
+            const int guestFd = allocateGuestFd(hostFd,
+                                                flags,
+                                                descriptorFlags,
+                                                directoryStream);
             if (guestFd < 0) {
+                if (directoryStream != nullptr) ::closedir(directoryStream);
                 ::close(hostFd);
                 return fail(number, EMFILE, "open guest fd table");
             }
@@ -509,7 +543,13 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EBADF, "close guest fd");
             }
             const int hostFd = file->second.hostFd;
+            DIR* directoryStream = file->second.directoryStream;
             guestFiles_.erase(file);
+            if (directoryStream != nullptr && ::closedir(directoryStream) != 0) {
+                const int savedError = errno;
+                ::close(hostFd);
+                return fail(number, savedError, "close directory stream");
+            }
             if (::close(hostFd) != 0) return fail(number, errno, "close host call");
             return ok(number, 0, "close");
         }
@@ -1123,6 +1163,100 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EFAULT, "sysctl output write");
             }
             return ok(number, 0, "sysctl");
+        }
+        case 344: {
+            const int guestFd = static_cast<int>(state.r[0]);
+            const uint32_t bufferAddress = state.r[1];
+            const size_t bufferSize = state.r[2];
+            const uint32_t positionAddress = state.r[3];
+            if (bufferSize == 0 || bufferSize > kMaximumTransfer) {
+                return fail(number, EINVAL, "getdirentries64 buffer size");
+            }
+            if (!memory_.write || positionAddress == 0) {
+                return fail(number, EFAULT, "getdirentries64 memory");
+            }
+            const auto file = guestFiles_.find(guestFd);
+            if (file == guestFiles_.end()) {
+                return fail(number, EBADF, "getdirentries64 guest fd");
+            }
+            DIR* stream = file->second.directoryStream;
+            if (stream == nullptr) {
+                return fail(number, ENOTDIR, "getdirentries64 not directory");
+            }
+
+            const long initialCookie = ::telldir(stream);
+            std::vector<uint8_t> output;
+            output.reserve(bufferSize);
+            uint64_t finalPosition = initialCookie < 0 ? 0u : static_cast<uint64_t>(initialCookie);
+
+            for (;;) {
+                const long entryCookie = ::telldir(stream);
+                errno = 0;
+                struct dirent* entry = ::readdir(stream);
+                if (entry == nullptr) {
+                    if (errno != 0) {
+                        if (initialCookie >= 0) ::seekdir(stream, initialCookie);
+                        return fail(number, errno, "getdirentries64 readdir");
+                    }
+                    break;
+                }
+
+                const size_t nameLength = ::strnlen(entry->d_name, 1024u);
+                if (nameLength > UINT16_MAX) {
+                    if (initialCookie >= 0) ::seekdir(stream, initialCookie);
+                    return fail(number, EOVERFLOW, "getdirentries64 name length");
+                }
+                const size_t recordSize = (21u + nameLength + 1u + 3u) & ~size_t(3u);
+                if (recordSize > UINT16_MAX) {
+                    if (initialCookie >= 0) ::seekdir(stream, initialCookie);
+                    return fail(number, EOVERFLOW, "getdirentries64 record length");
+                }
+                if (recordSize > bufferSize - output.size()) {
+                    if (entryCookie >= 0) ::seekdir(stream, entryCookie);
+                    if (output.empty()) {
+                        return fail(number, EINVAL, "getdirentries64 buffer too small");
+                    }
+                    break;
+                }
+
+                const long nextCookie = ::telldir(stream);
+                const uint64_t inode = static_cast<uint64_t>(entry->d_ino);
+                const uint64_t seekOffset =
+                    nextCookie < 0 ? finalPosition : static_cast<uint64_t>(nextCookie);
+                const uint16_t recordLength = static_cast<uint16_t>(recordSize);
+                const uint16_t guestNameLength = static_cast<uint16_t>(nameLength);
+                const uint8_t type = static_cast<uint8_t>(entry->d_type);
+                const size_t base = output.size();
+                output.resize(base + recordSize, 0);
+                std::memcpy(output.data() + base + 0u, &inode, sizeof(inode));
+                std::memcpy(output.data() + base + 8u, &seekOffset, sizeof(seekOffset));
+                std::memcpy(output.data() + base + 16u,
+                            &recordLength,
+                            sizeof(recordLength));
+                std::memcpy(output.data() + base + 18u,
+                            &guestNameLength,
+                            sizeof(guestNameLength));
+                std::memcpy(output.data() + base + 20u, &type, sizeof(type));
+                std::memcpy(output.data() + base + 21u,
+                            entry->d_name,
+                            nameLength + 1u);
+                finalPosition = seekOffset;
+            }
+
+            if (!output.empty() &&
+                !memory_.write(bufferAddress, output.data(), output.size())) {
+                if (initialCookie >= 0) ::seekdir(stream, initialCookie);
+                return fail(number, EFAULT, "getdirentries64 guest buffer write");
+            }
+            if (!memory_.write(positionAddress,
+                               &finalPosition,
+                               sizeof(finalPosition))) {
+                if (initialCookie >= 0) ::seekdir(stream, initialCookie);
+                return fail(number, EFAULT, "getdirentries64 position write");
+            }
+            return ok(number,
+                      static_cast<int32_t>(output.size()),
+                      "getdirentries64");
         }
         case 340: {
             std::string path;
