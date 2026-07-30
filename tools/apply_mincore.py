@@ -100,37 +100,4 @@ test_replacement = """    const auto missingAdvice = rooted.dispatch(state, 0x80
 if test_needle not in test:
     raise SystemExit("mincore test insertion point not found")
 test_path.write_text(test.replace(test_needle, test_replacement, 1))
-
-workflow_path = Path(".github/workflows/test-lc32-interpreter.yml")
-workflow = workflow_path.read_text()
-workflow = workflow.replace(
-    "      - 'tools/fix-lc32-interpreter-mask.py'\n",
-    "      - 'tools/fix-lc32-interpreter-mask.py'\n      - 'tools/apply_mincore.py'\n",
-    1,
-)
-job = """  apply-staged-mincore-patch:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - name: Apply staged mincore patch
-        shell: bash
-        run: python3 tools/apply_mincore.py
-      - name: Commit staged mincore patch
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "runtime: add mincore support"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
-"""
-workflow = workflow.replace("jobs:\n", "jobs:\n" + job, 1)
-workflow_path.write_text(workflow)
 Path(__file__).unlink()
