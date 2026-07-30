@@ -56,6 +56,10 @@ private:
         DIR* directoryStream = nullptr;
     };
 
+    struct MachPort {
+        std::deque<std::vector<uint8_t>> messages;
+    };
+
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
     TrapResult dispatchMach(CPUState& state, uint32_t number);
     void writeReturn(CPUState& state, const TrapResult& result) const;
