@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -25,6 +26,81 @@ constexpr uint32_t kFcntlGetFd = 1u;
 constexpr uint32_t kFcntlSetFd = 2u;
 constexpr uint32_t kFcntlGetFl = 3u;
 constexpr size_t kMaximumTransfer = 16u * 1024u * 1024u;
+
+#pragma pack(push, 4)
+struct GuestTimespec32 {
+    int32_t seconds = 0;
+    int32_t nanoseconds = 0;
+};
+
+// XNU 2050 (iOS 6-era) user32_stat64. The kernel declaration is explicitly
+// packed and aligned to four bytes for 32-bit clients.
+struct GuestStat64 {
+    int32_t device = 0;
+    uint16_t mode = 0;
+    uint16_t linkCount = 0;
+    uint64_t inode = 0;
+    uint32_t userId = 0;
+    uint32_t groupId = 0;
+    int32_t specialDevice = 0;
+    GuestTimespec32 accessTime;
+    GuestTimespec32 modificationTime;
+    GuestTimespec32 statusChangeTime;
+    GuestTimespec32 birthTime;
+    int64_t size = 0;
+    int64_t blocks = 0;
+    int32_t blockSize = 0;
+    uint32_t flags = 0;
+    uint32_t generation = 0;
+    uint32_t longSpare = 0;
+    int64_t quadSpare[2]{};
+};
+#pragma pack(pop)
+
+static_assert(sizeof(GuestTimespec32) == 8, "unexpected ARMv7 timespec layout");
+static_assert(sizeof(GuestStat64) == 108, "unexpected iOS 6 user32_stat64 layout");
+
+int32_t clampSigned32(int64_t value) {
+    if (value > INT32_MAX) return INT32_MAX;
+    if (value < INT32_MIN) return INT32_MIN;
+    return static_cast<int32_t>(value);
+}
+
+GuestTimespec32 guestTimespec(int64_t seconds, int64_t nanoseconds) {
+    GuestTimespec32 out;
+    out.seconds = clampSigned32(seconds);
+    out.nanoseconds = clampSigned32(nanoseconds);
+    return out;
+}
+
+GuestStat64 guestStat64(const struct stat& host) {
+    GuestStat64 out;
+    out.device = static_cast<int32_t>(host.st_dev);
+    out.mode = static_cast<uint16_t>(host.st_mode);
+    const uint64_t links = static_cast<uint64_t>(host.st_nlink);
+    out.linkCount = static_cast<uint16_t>(links > UINT16_MAX ? UINT16_MAX : links);
+    out.inode = static_cast<uint64_t>(host.st_ino);
+    out.userId = static_cast<uint32_t>(host.st_uid);
+    out.groupId = static_cast<uint32_t>(host.st_gid);
+    out.specialDevice = static_cast<int32_t>(host.st_rdev);
+#if defined(__APPLE__)
+    out.accessTime = guestTimespec(host.st_atimespec.tv_sec, host.st_atimespec.tv_nsec);
+    out.modificationTime = guestTimespec(host.st_mtimespec.tv_sec, host.st_mtimespec.tv_nsec);
+    out.statusChangeTime = guestTimespec(host.st_ctimespec.tv_sec, host.st_ctimespec.tv_nsec);
+    out.birthTime = guestTimespec(host.st_birthtimespec.tv_sec, host.st_birthtimespec.tv_nsec);
+    out.flags = static_cast<uint32_t>(host.st_flags);
+    out.generation = static_cast<uint32_t>(host.st_gen);
+#else
+    out.accessTime = guestTimespec(host.st_atim.tv_sec, host.st_atim.tv_nsec);
+    out.modificationTime = guestTimespec(host.st_mtim.tv_sec, host.st_mtim.tv_nsec);
+    out.statusChangeTime = guestTimespec(host.st_ctim.tv_sec, host.st_ctim.tv_nsec);
+    out.birthTime = {};
+#endif
+    out.size = static_cast<int64_t>(host.st_size);
+    out.blocks = static_cast<int64_t>(host.st_blocks);
+    out.blockSize = clampSigned32(static_cast<int64_t>(host.st_blksize));
+    return out;
+}
 
 TrapResult ok(uint32_t number, int32_t value, const char* detail) {
     TrapResult r;
@@ -316,6 +392,21 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EFAULT, "gettimeofday guest write");
             }
             return ok(number, 0, "gettimeofday");
+        }
+        case 339: {
+            const int guestFd = static_cast<int>(state.r[0]);
+            const uint32_t statAddress = state.r[1];
+            const auto file = guestFiles_.find(guestFd);
+            if (file == guestFiles_.end()) return fail(number, EBADF, "fstat64 guest fd");
+            struct stat host{};
+            if (::fstat(file->second.hostFd, &host) != 0) {
+                return fail(number, errno, "fstat64 host call");
+            }
+            const GuestStat64 guest = guestStat64(host);
+            if (!memory_.write || !memory_.write(statAddress, &guest, sizeof(guest))) {
+                return fail(number, EFAULT, "fstat64 guest write");
+            }
+            return ok(number, 0, "fstat64");
         }
         default: {
             TrapResult r;
