@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <sstream>
+#include <utility>
 
 namespace lc32 {
 
@@ -82,6 +83,37 @@ bool DyldBootSession::dispatchSupervisorCall(DyldBootResult& out, const Result& 
     return true;
 }
 
+DyldBootResult DyldBootSession::executePrepared(DyldBootResult out, uint64_t maxSteps) {
+    out.prepared = true;
+    state_.r[15] = out.handoff.pc;
+    state_.r[13] = out.handoff.sp;
+    state_.r[0] = out.handoff.mainMachHeader;
+    state_.setThumb(out.handoff.thumb);
+    event(out, "dyld-handoff-ready", "entering guest dyld", out.handoff.mainMachHeader);
+
+    Memory memory{
+        [this](uint32_t address, void* data, size_t size) { return read(address, data, size); },
+        [this](uint32_t address, const void* data, size_t size) { return write(address, data, size); }};
+    DarwinSyscalls syscalls({memory.read, memory.write});
+    Interpreter interpreter(state_, memory);
+
+    for (uint64_t i = 0; i < maxSteps; ++i) {
+        Result step = interpreter.step();
+        if (step.reason == StopReason::None) continue;
+        if (step.reason == StopReason::UnsupportedInstruction && dispatchSupervisorCall(out, step, syscalls)) {
+            if (out.exited || !out.cpuResult.detail.empty()) return out;
+            continue;
+        }
+        out.cpuResult = step;
+        event(out, "dyld-cpu-stop", step.detail, step.instruction);
+        return out;
+    }
+
+    out.cpuResult = {StopReason::StepLimit, state_.r[15], 0, maxSteps, "dyld boot step limit"};
+    event(out, "dyld-step-limit");
+    return out;
+}
+
 DyldBootResult DyldBootSession::boot(const DyldHandoffSpec& spec, uint64_t maxSteps) {
     return bootImpl(spec, nullptr, nullptr, maxSteps);
 }
@@ -91,6 +123,41 @@ DyldBootResult DyldBootSession::bootAudited(const DyldHandoffSpec& spec,
                                             const GuestPathExists& exists,
                                             uint64_t maxSteps) {
     return bootImpl(spec, &context, &exists, maxSteps);
+}
+
+DyldBootResult DyldBootSession::bootImageSet(const DyldImageSetSpec& spec,
+                                             uint64_t maxSteps) {
+    DyldBootResult out;
+    regions_.clear();
+    state_ = {};
+    event(out, "dyld-image-set-start", "planning and mapping guest dependency images");
+
+    out.imageSet = prepareDyldImageSet(
+        spec,
+        [this](uint32_t address, uint32_t size, uint32_t protection) {
+            return map(address, size, protection);
+        },
+        [this](uint32_t address, const void* data, std::size_t size) {
+            return write(address, data, size);
+        });
+    if (!out.imageSet.ok) {
+        out.cpuResult = {StopReason::Halt, 0, 0, 0, out.imageSet.error};
+        event(out, "dyld-image-set-failed", out.imageSet.error);
+        return out;
+    }
+
+    out.handoff = out.imageSet.handoff;
+    if (!out.imageSet.plan.nodes.empty()) {
+        out.dependencies = out.imageSet.plan.nodes.front().metadata;
+    }
+    for (const DependencyMappedImage& image : out.imageSet.mappedDependencies.images) {
+        event(out, "dependency-image-mapped", image.guestPath, image.slide);
+    }
+    event(out,
+          "dyld-image-set-ready",
+          "mapped " + std::to_string(out.imageSet.mappedDependencies.images.size()) + " dependency images",
+          static_cast<uint32_t>(out.imageSet.mappedDependencies.images.size()));
+    return executePrepared(std::move(out), maxSteps);
 }
 
 DyldBootResult DyldBootSession::bootImpl(const DyldHandoffSpec& spec,
@@ -135,34 +202,7 @@ DyldBootResult DyldBootSession::bootImpl(const DyldHandoffSpec& spec,
         return out;
     }
 
-    out.prepared = true;
-    state_.r[15] = out.handoff.pc;
-    state_.r[13] = out.handoff.sp;
-    state_.r[0] = out.handoff.mainMachHeader;
-    state_.setThumb(out.handoff.thumb);
-    event(out, "dyld-handoff-ready", "entering guest dyld", out.handoff.mainMachHeader);
-
-    Memory memory{
-        [this](uint32_t address, void* data, size_t size) { return read(address, data, size); },
-        [this](uint32_t address, const void* data, size_t size) { return write(address, data, size); }};
-    DarwinSyscalls syscalls({memory.read, memory.write});
-    Interpreter interpreter(state_, memory);
-
-    for (uint64_t i = 0; i < maxSteps; ++i) {
-        Result step = interpreter.step();
-        if (step.reason == StopReason::None) continue;
-        if (step.reason == StopReason::UnsupportedInstruction && dispatchSupervisorCall(out, step, syscalls)) {
-            if (out.exited || !out.cpuResult.detail.empty()) return out;
-            continue;
-        }
-        out.cpuResult = step;
-        event(out, "dyld-cpu-stop", step.detail, step.instruction);
-        return out;
-    }
-
-    out.cpuResult = {StopReason::StepLimit, state_.r[15], 0, maxSteps, "dyld boot step limit"};
-    event(out, "dyld-step-limit");
-    return out;
+    return executePrepared(std::move(out), maxSteps);
 }
 
 } // namespace lc32
