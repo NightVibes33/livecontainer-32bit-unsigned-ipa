@@ -60,6 +60,14 @@ void logEvent(const std::string& stage,
     std::fclose(file);
 }
 
+std::string gLastError;
+
+int failWith(int code, const std::string& stage, const std::string& detail) {
+    gLastError = stage + ": " + detail;
+    logEvent(stage, detail);
+    return code;
+}
+
 bool readFile(const char* path, std::vector<uint8_t>& bytes, std::string& error) {
     if (!path || !*path) {
         error = "path is empty";
@@ -104,19 +112,23 @@ std::string envValue(const char* key, const char* fallback = "") {
 } // namespace
 
 extern "C" __attribute__((visibility("default")))
+const char* LC32LastError(void) {
+    return gLastError.c_str();
+}
+
+extern "C" __attribute__((visibility("default")))
 int LC32Main(int argc, char** argv) {
+    gLastError.clear();
     const char* executable = std::getenv("LC32_GUEST_EXECUTABLE");
     if ((!executable || !*executable) && argc > 1) executable = argv[1];
     const char* dyld = std::getenv("LC32_GUEST_DYLD");
     const std::string guestRoot = envValue("LC32_GUEST_ROOTFS");
 
     if (!executable || !*executable) {
-        logEvent("configuration-error", "LC32_GUEST_EXECUTABLE is missing");
-        return 64;
+        return failWith(64, "configuration-error", "LC32_GUEST_EXECUTABLE is missing");
     }
     if (!dyld || !*dyld) {
-        logEvent("configuration-error", "LC32_GUEST_DYLD is missing");
-        return 64;
+        return failWith(64, "configuration-error", "LC32_GUEST_DYLD is missing");
     }
 
     logEvent("plugin-start", executable);
@@ -125,12 +137,10 @@ int LC32Main(int argc, char** argv) {
     std::vector<uint8_t> dyldImage;
     std::string error;
     if (!readFile(executable, appImage, error)) {
-        logEvent("guest-executable-read-failed", error);
-        return 66;
+        return failWith(66, "guest-executable-read-failed", std::string(executable) + ": " + error);
     }
     if (!readFile(dyld, dyldImage, error)) {
-        logEvent("guest-dyld-read-failed", error);
-        return 66;
+        return failWith(66, "guest-dyld-read-failed", std::string(dyld) + ": " + error);
     }
 
     lc32::DyldHandoffSpec spec;
@@ -165,6 +175,7 @@ int LC32Main(int argc, char** argv) {
         const std::string detail = !result.handoff.error.empty()
                                        ? result.handoff.error
                                        : result.cpuResult.detail;
+        gLastError = "boot-preparation-failed: " + detail;
         logEvent("boot-preparation-failed", detail, result.cpuResult.pc,
                  result.cpuResult.instruction);
         return 70;
@@ -177,6 +188,7 @@ int LC32Main(int argc, char** argv) {
 
     std::string stopDetail = result.cpuResult.detail;
     if (stopDetail.empty()) stopDetail = "guest stopped without exiting";
+    gLastError = "guest-cpu-stop: " + stopDetail;
     logEvent("guest-cpu-stop", stopDetail, result.cpuResult.pc,
              result.cpuResult.instruction);
     return 71;
