@@ -6,7 +6,10 @@ on:
     paths:
       - '.github/workflows/iosobscura-batch-1000.yml'
       - 'runtime/LC32VirtualRuntime.hpp'
+      - 'runtime/LC32MachOImports.hpp'
       - 'runtime/LC32PluginMain.cpp'
+      - 'tools/compat32-report.py'
+      - 'tools/iosobscura-github-batch.py'
   workflow_dispatch:
 
 permissions:
@@ -96,26 +99,59 @@ jobs:
         with:
           pattern: iosobscura-current-lc32-1000-shard-*
           path: shards
-      - name: Merge batch
+      - name: Merge batch and rank runtime symbols
         run: |
           python3 - <<'PY'
           import json
           from collections import Counter
           from pathlib import Path
+
           rows=[]
           for p in Path('shards').rglob('results.jsonl'):
               for line in p.read_text(errors='replace').splitlines():
                   try: rows.append(json.loads(line))
                   except json.JSONDecodeError: pass
           rows.sort(key=lambda r:r.get('globalIndex',10**12))
+
           result=Counter(r.get('result','error') for r in rows)
           failures=Counter(x for r in rows for x in r.get('failures',[]))
           deps=Counter(x for r in rows for x in set(r.get('dependencies') or []))
+          first_runtime=Counter()
+          ready_symbols=Counter()
+          planned_symbols=Counter()
+          unknown_symbols=Counter()
+          runtime_reports=0
+          for report_path in Path('shards').rglob('reports/*.json'):
+              try:
+                  report=json.loads(report_path.read_text())
+              except Exception:
+                  continue
+              runtime=report.get('guest',{}).get('baseRuntime',{})
+              if not runtime:
+                  continue
+              runtime_reports += 1
+              if runtime.get('firstRuntimeBlocker'):
+                  first_runtime[runtime['firstRuntimeBlocker']] += 1
+              ready_symbols.update(set(runtime.get('readySymbols') or []))
+              planned_symbols.update(set(runtime.get('plannedSymbols') or []))
+              unknown_symbols.update(set(runtime.get('unknownSymbols') or []))
+
           out=Path('batch-1000'); out.mkdir()
-          summary={'startIndex':1000,'requested':1000,'processed':len(rows),'nextIndex':2000,
-                   'resultCounts':dict(result),'topFailures':failures.most_common(100),
-                   'topDependencies':deps.most_common(250),
-                   'scope':'static/package compatibility against exact current LC32 build'}
+          summary={
+              'startIndex':1000,
+              'requested':1000,
+              'processed':len(rows),
+              'nextIndex':2000,
+              'resultCounts':dict(result),
+              'topFailures':failures.most_common(100),
+              'topDependencies':deps.most_common(250),
+              'runtimeReports':runtime_reports,
+              'topFirstRuntimeBlockers':first_runtime.most_common(250),
+              'topReadyVirtualSymbols':ready_symbols.most_common(250),
+              'topPlannedVirtualSymbols':planned_symbols.most_common(250),
+              'topUnknownSymbols':unknown_symbols.most_common(250),
+              'scope':'static/package and base-runtime symbol compatibility against exact current LC32 build'
+          }
           (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
           (out/'results.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows))
           print(json.dumps(summary,indent=2))
