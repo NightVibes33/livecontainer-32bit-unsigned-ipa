@@ -1635,12 +1635,9 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                                           const std::vector<uint32_t>& words) {
             if (replyName == 0) return;
             auto replyPort = machPorts_.find(replyName);
-            if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0) {
-                return;
-            }
-
+            if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0) return;
             constexpr uint8_t kNdr[8] = {0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u};
-            std::vector<uint8_t> reply(36u + words.size() * sizeof(uint32_t), 0u);
+            std::vector<uint8_t> reply(36u + words.size() * 4u, 0u);
             const uint32_t size = static_cast<uint32_t>(reply.size());
             const uint32_t local = replyName;
             const uint32_t replyId = requestId + 100u;
@@ -1649,38 +1646,122 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
             std::memcpy(reply.data() + 20u, &replyId, 4u);
             std::memcpy(reply.data() + 24u, kNdr, sizeof(kNdr));
             std::memcpy(reply.data() + 32u, &returnCode, 4u);
-            if (!words.empty()) {
-                std::memcpy(reply.data() + 36u,
-                            words.data(),
-                            words.size() * sizeof(uint32_t));
-            }
+            if (!words.empty()) std::memcpy(reply.data() + 36u, words.data(), words.size() * 4u);
             replyPort->second.messages.push_back(std::move(reply));
         };
-
+        const auto tokenAt32 = [&]() -> int32_t {
+            int32_t token = 0;
+            if (request.size() >= 36u) std::memcpy(&token, request.data() + 32u, 4u);
+            return token;
+        };
         constexpr int32_t kMigBadId = -303;
+        constexpr uint32_t kNotifyOk = 0u;
+        constexpr uint32_t kNotifyInvalidToken = 2u;
+
         if (destination != kNotificationCenterPort) {
             queueInlineReply(kMigBadId, {});
             return true;
         }
 
         switch (requestId) {
-            case 1002u: // _notify_server_check
-                if (request.size() >= 36u) {
-                    queueInlineReply(0, {0u, 0u}); // check=false, status=OK
+            case 1002u: { // check(token) -> check,status and clear pending
+                const int32_t token = tokenAt32();
+                auto it = notifyRegistrations_.find(token);
+                if (it == notifyRegistrations_.end()) {
+                    queueInlineReply(0, {0u, kNotifyInvalidToken});
                 } else {
-                    queueInlineReply(kMigBadId, {});
+                    const uint32_t pending = (!it->second.suspended && it->second.pending) ? 1u : 0u;
+                    if (pending != 0u) it->second.pending = false;
+                    queueInlineReply(0, {pending, kNotifyOk});
                 }
                 return true;
-            case 1004u: // _notify_server_suspend
-            case 1005u: // _notify_server_resume
-                if (request.size() >= 36u) {
-                    queueInlineReply(0, {0u}); // status=OK
+            }
+            case 1003u: { // get_state(token)
+                const int32_t token = tokenAt32();
+                auto it = notifyRegistrations_.find(token);
+                if (it == notifyRegistrations_.end()) {
+                    queueInlineReply(0, {0u, 0u, kNotifyInvalidToken});
                 } else {
-                    queueInlineReply(kMigBadId, {});
+                    queueInlineReply(0, {static_cast<uint32_t>(it->second.state),
+                                         static_cast<uint32_t>(it->second.state >> 32u),
+                                         kNotifyOk});
                 }
                 return true;
-            case 1023u: // _notify_server_checkin
-                queueInlineReply(0, {3u, 42u, 0u}); // version, server PID, status
+            }
+            case 1004u:
+            case 1005u: {
+                const int32_t token = tokenAt32();
+                auto it = notifyRegistrations_.find(token);
+                const uint32_t status = it == notifyRegistrations_.end() ? kNotifyInvalidToken : kNotifyOk;
+                if (it != notifyRegistrations_.end()) it->second.suspended = requestId == 1004u;
+                queueInlineReply(0, {status});
+                return true;
+            }
+            case 1009u: { // post by stable name id, one-way
+                if (request.size() >= 40u) {
+                    uint64_t nameId = 0;
+                    std::memcpy(&nameId, request.data() + 32u, 8u);
+                    for (auto& entry : notifyRegistrations_) {
+                        if (entry.second.nameId == nameId) entry.second.pending = true;
+                    }
+                }
+                return true;
+            }
+            case 1011u: { // fixed-name compatibility form: name[128] at 32, token at 160
+                if (request.size() < 164u) return true;
+                const char* nameBytes = reinterpret_cast<const char*>(request.data() + 32u);
+                size_t length = 0;
+                while (length < 128u && nameBytes[length] != '\0') ++length;
+                if (length == 0u || length == 128u) return true;
+                int32_t token = 0;
+                std::memcpy(&token, request.data() + 160u, 4u);
+                const std::string name(nameBytes, length);
+                uint64_t nameId = 0;
+                auto nameIt = notifyNameIds_.find(name);
+                if (nameIt == notifyNameIds_.end()) {
+                    nameId = nextNotifyNameId_++;
+                    notifyNameIds_.emplace(name, nameId);
+                } else {
+                    nameId = nameIt->second;
+                }
+                notifyRegistrations_[token] = NotifyRegistration{name, nameId, 0u, false, false};
+                return true;
+            }
+            case 1016u:
+                notifyRegistrations_.erase(tokenAt32());
+                return true;
+            case 1018u: { // get_state_3(token) -> state,nid,status
+                const int32_t token = tokenAt32();
+                auto it = notifyRegistrations_.find(token);
+                if (it == notifyRegistrations_.end()) {
+                    queueInlineReply(0, {0u, 0u, UINT32_MAX, UINT32_MAX, kNotifyInvalidToken});
+                } else {
+                    queueInlineReply(0, {static_cast<uint32_t>(it->second.state),
+                                         static_cast<uint32_t>(it->second.state >> 32u),
+                                         static_cast<uint32_t>(it->second.nameId),
+                                         static_cast<uint32_t>(it->second.nameId >> 32u),
+                                         kNotifyOk});
+                }
+                return true;
+            }
+            case 1020u: { // set_state_3(token,state) -> nid,status
+                if (request.size() < 44u) { queueInlineReply(kMigBadId, {}); return true; }
+                const int32_t token = tokenAt32();
+                uint64_t value = 0;
+                std::memcpy(&value, request.data() + 36u, 8u);
+                auto it = notifyRegistrations_.find(token);
+                if (it == notifyRegistrations_.end()) {
+                    queueInlineReply(0, {UINT32_MAX, UINT32_MAX, kNotifyInvalidToken});
+                } else {
+                    it->second.state = value;
+                    queueInlineReply(0, {static_cast<uint32_t>(it->second.nameId),
+                                         static_cast<uint32_t>(it->second.nameId >> 32u),
+                                         kNotifyOk});
+                }
+                return true;
+            }
+            case 1023u:
+                queueInlineReply(0, {3u, 42u, kNotifyOk});
                 return true;
             default:
                 queueInlineReply(kMigBadId, {});

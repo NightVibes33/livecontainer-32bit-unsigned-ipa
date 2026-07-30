@@ -64,6 +64,14 @@ private:
         bool immortal = false;
     };
 
+    struct NotifyRegistration {
+        std::string name;
+        uint64_t nameId = 0;
+        uint64_t state = 0;
+        bool pending = false;
+        bool suspended = false;
+    };
+
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
     TrapResult dispatchMach(CPUState& state, uint32_t number);
     void writeReturn(CPUState& state, const TrapResult& result) const;
@@ -82,6 +90,9 @@ private:
     std::string guestRoot_;
     std::unordered_map<int, GuestFile> guestFiles_;
     std::unordered_map<uint32_t, MachPort> machPorts_;
+    std::unordered_map<int32_t, NotifyRegistration> notifyRegistrations_;
+    std::unordered_map<std::string, uint64_t> notifyNameIds_;
+    uint64_t nextNotifyNameId_ = 1u;
     uint32_t nextMachPort_ = 0x200u;
     int nextGuestFd_ = 3;
     uint32_t nextMmapAddress_ = 0x50000000u;

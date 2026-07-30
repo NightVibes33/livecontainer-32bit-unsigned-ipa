@@ -591,6 +591,60 @@ int main() {
     const auto loggerQueueEmpty = syscalls.dispatch(state, 0, false);
     assert(loggerQueueEmpty.handled && state.r[0] == 0x10004003u);
 
+
+    // Stateful notify registration compatibility form.
+    std::vector<uint8_t> registerRequest(164u, 0u);
+    uint32_t registerHeader[6] = {19u, 164u, 0x111u, 0u, 0u, 1011u};
+    std::memcpy(registerRequest.data(), registerHeader, sizeof(registerHeader));
+    const char notifyName[] = "com.example.lc32.state";
+    std::memcpy(registerRequest.data() + 32u, notifyName, sizeof(notifyName));
+    const int32_t notifyToken = 77;
+    std::memcpy(registerRequest.data() + 160u, &notifyToken, 4u);
+    std::memcpy(lowMemory.data() + kMachMessageAddress, registerRequest.data(), registerRequest.size());
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachSendMsg;
+    state.r[2] = 164u;
+    assert(syscalls.dispatch(state, 0, false).handled && state.r[0] == 0u);
+
+    // Set token state to a 64-bit value and recover its stable name ID.
+    sendServiceRequest(0x111u, 1020u, {0u, 0u, 77u, 0x55667788u, 0x11223344u}, true);
+    assert(receiveServiceReply(64u).handled && state.r[0] == 0u);
+    uint32_t notifyNameIdLow = 0;
+    uint32_t notifyNameIdHigh = 0;
+    std::memcpy(&notifyNameIdLow, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&notifyNameIdHigh, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    assert(notifyNameIdLow != 0u && notifyNameIdHigh == 0u);
+
+    sendServiceRequest(0x111u, 1003u, {0u, 0u, 77u}, true);
+    assert(receiveServiceReply(64u).handled && state.r[0] == 0u);
+    uint32_t stateLow = 0;
+    uint32_t stateHigh = 0;
+    std::memcpy(&stateLow, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&stateHigh, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    assert(stateLow == 0x55667788u && stateHigh == 0x11223344u);
+
+    // Post by name ID, then check consumes the pending edge exactly once.
+    sendServiceRequest(0x111u, 1009u, {0u, 0u, notifyNameIdLow, notifyNameIdHigh}, false);
+    sendServiceRequest(0x111u, 1002u, {0u, 0u, 77u}, true);
+    assert(receiveServiceReply(64u).handled && state.r[0] == 0u);
+    uint32_t pendingOnce = 0;
+    std::memcpy(&pendingOnce, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    assert(pendingOnce == 1u);
+    sendServiceRequest(0x111u, 1002u, {0u, 0u, 77u}, true);
+    assert(receiveServiceReply(64u).handled && state.r[0] == 0u);
+    std::memcpy(&pendingOnce, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    assert(pendingOnce == 0u);
+
+    // Cancellation is one-way; subsequent check reports invalid token.
+    sendServiceRequest(0x111u, 1016u, {0u, 0u, 77u}, false);
+    sendServiceRequest(0x111u, 1002u, {0u, 0u, 77u}, true);
+    assert(receiveServiceReply(64u).handled && state.r[0] == 0u);
+    uint32_t canceledStatus = 0;
+    std::memcpy(&canceledStatus, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    assert(canceledStatus == 2u);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
