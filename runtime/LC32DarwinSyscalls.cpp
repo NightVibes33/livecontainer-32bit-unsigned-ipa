@@ -513,6 +513,32 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             // deterministic guest bytes and treats valid hints as successful.
             return ok(number, 0, "madvise virtual no-op");
         }
+        case 78: {
+            const uint32_t address = state.r[0];
+            const uint32_t length = state.r[1];
+            const uint32_t vectorAddress = state.r[2];
+            if (length == 0 || length > kMaximumMapping ||
+                (address & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "mincore range");
+            }
+            uint32_t mappedLength = 0;
+            if (!alignPage(length, mappedLength) || mappedLength == 0 ||
+                static_cast<uint64_t>(address) + mappedLength > 0x100000000ull) {
+                return fail(number, EINVAL, "mincore aligned range");
+            }
+            if (!mappedPageRange(memory_, address, mappedLength)) {
+                return fail(number, ENOMEM, "mincore unmapped range");
+            }
+            if (!memory_.write || vectorAddress == 0) {
+                return fail(number, EFAULT, "mincore vector");
+            }
+            const size_t pageCount = mappedLength / kPageSize;
+            std::vector<uint8_t> residency(pageCount, 0x01u);
+            if (!memory_.write(vectorAddress, residency.data(), residency.size())) {
+                return fail(number, EFAULT, "mincore guest write");
+            }
+            return ok(number, 0, "mincore");
+        }
         case 92: {
             const int guestFd = static_cast<int>(state.r[0]);
             const uint32_t command = state.r[1];

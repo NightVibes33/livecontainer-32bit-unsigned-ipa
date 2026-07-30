@@ -41,6 +41,7 @@ int main() {
     constexpr uint32_t kReadAddress = 0x0800u;
     constexpr uint32_t kStatAddress = 0x1000u;
     constexpr uint32_t kFstatAddress = 0x1200u;
+    constexpr uint32_t kMincoreAddress = 0x1400u;
     constexpr uint32_t kStackAddress = 0x3000u;
 
     constexpr uint32_t kProtRead = 0x01u;
@@ -503,6 +504,41 @@ int main() {
     state.r[2] = 0u;
     const auto missingAdvice = rooted.dispatch(state, 0x80u, false);
     assert(missingAdvice.handled && missingAdvice.errorNumber == ENOMEM);
+
+    std::memset(lowMemory.data() + kMincoreAddress, 0, 2u);
+    state = {};
+    state.r[12] = 78;
+    state.r[0] = anonymousAddress;
+    state.r[1] = 0x2000u;
+    state.r[2] = kMincoreAddress;
+    const auto resident = rooted.dispatch(state, 0x80u, false);
+    assert(resident.handled && resident.errorNumber == 0);
+    assert(lowMemory[kMincoreAddress] == 0x01u);
+    assert(lowMemory[kMincoreAddress + 1u] == 0x01u);
+
+    state = {};
+    state.r[12] = 78;
+    state.r[0] = anonymousAddress + 1u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMincoreAddress;
+    const auto unalignedMincore = rooted.dispatch(state, 0x80u, false);
+    assert(unalignedMincore.handled && unalignedMincore.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 78;
+    state.r[0] = 0x6c000000u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMincoreAddress;
+    const auto missingMincore = rooted.dispatch(state, 0x80u, false);
+    assert(missingMincore.handled && missingMincore.errorNumber == ENOMEM);
+
+    state = {};
+    state.r[12] = 78;
+    state.r[0] = anonymousAddress;
+    state.r[1] = 0x2000u;
+    state.r[2] = static_cast<uint32_t>(lowMemory.size() - 1u);
+    const auto badMincoreVector = rooted.dispatch(state, 0x80u, false);
+    assert(badMincoreVector.handled && badMincoreVector.errorNumber == EFAULT);
 
     state = {};
     state.r[12] = 92;
