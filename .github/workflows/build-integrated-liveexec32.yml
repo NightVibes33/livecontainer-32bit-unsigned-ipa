@@ -121,7 +121,10 @@ jobs:
           test -f "$APP/LiveExec32.app/LiveExec32"
           file "$APP/LiveContainer"
           file "$APP/LiveExec32.app/LiveExec32"
-          grep -R -a -q 'JIT is required to run 32-bit apps through LiveExec32' "$APP"
+          if grep -R -a -q 'JIT is required to run 32-bit apps through LiveExec32' "$APP"; then
+            echo 'obsolete 32-bit JIT gate remains in integrated package' >&2
+            exit 1
+          fi
           grep -R -a -q --exclude='LiveExec32' 'LC32_GUEST_EXECUTABLE' "$APP"
           strings "$APP/LiveExec32.app/LiveExec32" | grep -q 'guest-executable-mapped'
           strings "$APP/LiveExec32.app/LiveExec32" | grep -q 'guest-dyld-mapped'
