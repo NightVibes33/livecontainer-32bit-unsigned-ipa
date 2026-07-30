@@ -49,6 +49,15 @@ jobs:
             -o lc32-darwin-syscall-tests
       - name: Run Darwin syscall tests
         run: ./lc32-darwin-syscall-tests
+      - name: Build Darwin process stack tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32ProcessStack.cpp \
+            runtime/tests/LC32ProcessStackTests.cpp \
+            -o lc32-process-stack-tests
+      - name: Run Darwin process stack tests
+        run: ./lc32-process-stack-tests
       - name: Build no-JIT ARMv7 boot-session tests
         run: |
           set -euxo pipefail
