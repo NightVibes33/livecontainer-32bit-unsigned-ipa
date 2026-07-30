@@ -1,0 +1,143 @@
+name: Validate All iOSObscura IPAs on One Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization_attestation:
+        description: 'Type I_HAVE_AUTHORIZATION to download and test the archive'
+        required: true
+        default: ''
+      workers:
+        description: 'Concurrent downloads/validators on the single runner (1-16)'
+        required: true
+        default: '4'
+      persistent_state_dir:
+        description: 'Absolute persistent directory on the self-hosted runner'
+        required: true
+        default: '/Users/Shared/LiveContainer-iOSObscura-campaign'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iosobscura-all-17000-single-runner
+  cancel-in-progress: false
+
+jobs:
+  validate-all:
+    name: Build app and validate complete iOSObscura catalog
+    # Register one macOS machine with this custom label. The job stays on that one machine.
+    runs-on: [self-hosted, macOS, iosobscura]
+    timeout-minutes: 7200
+    env:
+      THEOS: ${{ runner.temp }}/theos
+      STATE_DIR: ${{ inputs.persistent_state_dir }}
+      LIVEEXEC_SOURCE: ${{ runner.temp }}/LiveExec32
+      DERIVED_DATA: ${{ runner.temp }}/LiveContainerDerivedData
+    steps:
+      - name: Require explicit authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.authorization_attestation }}' = 'I_HAVE_AUTHORIZATION' || {
+            echo 'authorization_attestation must equal I_HAVE_AUTHORIZATION' >&2
+            exit 1
+          }
+          WORKERS='${{ inputs.workers }}'
+          [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 16 ] || {
+            echo 'workers must be 1..16' >&2
+            exit 1
+          }
+          case "$STATE_DIR" in
+            /*) ;;
+            *) echo 'persistent_state_dir must be absolute' >&2; exit 1 ;;
+          esac
+          mkdir -p "$STATE_DIR"
+
+      - name: Verify runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodebuild
+          command -v python3
+          command -v git
+          command -v make
+          command -v ditto
+          xcodebuild -version
+          df -h "$STATE_DIR"
+
+      - name: Checkout LiveContainer fork
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          clean: true
+
+      - name: Prepare Theos and LiveExec32 source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$THEOS" "$LIVEEXEC_SOURCE"
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+          git clone --recursive https://github.com/LiveContainer/LiveExec32.git "$LIVEEXEC_SOURCE"
+          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' "$LIVEEXEC_SOURCE/Makefile"
+
+      - name: Build LiveExec32
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -C "$LIVEEXEC_SOURCE" clean
+          make -C "$LIVEEXEC_SOURCE"
+          LIVEEXEC_APP=$(find "$LIVEEXEC_SOURCE/.theos" -type d -name LiveExec32.app -print -quit)
+          test -n "$LIVEEXEC_APP"
+          test -f "$LIVEEXEC_APP/LiveExec32"
+          echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+
+      - name: Build exact LiveContainer test IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$DERIVED_DATA"
+          xcodebuild build \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            PROVISIONING_PROFILE_SPECIFIER='' \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported'
+          APP=$(find "$DERIVED_DATA/Build/Products/Release-iphoneos" -maxdepth 2 -type d -name LiveContainer.app -print -quit)
+          test -n "$APP"
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$LIVEEXEC_APP" "$APP/LiveExec32.app"
+          tools/package-unsigned-ipa.sh "$APP" "$STATE_DIR/LiveContainer-compat32-campaign.ipa"
+          test -f "$STATE_DIR/LiveContainer-compat32-campaign.ipa"
+
+      - name: Validate complete archive sequential campaign on this runner
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/iosobscura-full-campaign.py \
+            --authorized \
+            --workers '${{ inputs.workers }}' \
+            --livecontainer-ipa "$STATE_DIR/LiveContainer-compat32-campaign.ipa" \
+            --output-dir "$STATE_DIR/results" \
+            2>&1 | tee -a "$STATE_DIR/campaign.log"
+
+      - name: Publish final compact reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iosobscura-all-17000-summary
+          path: |
+            ${{ inputs.persistent_state_dir }}/results/summary.json
+            ${{ inputs.persistent_state_dir }}/results/results.jsonl
+            ${{ inputs.persistent_state_dir }}/results/catalog.json
+            ${{ inputs.persistent_state_dir }}/campaign.log
+          if-no-files-found: warn
+          retention-days: 30
