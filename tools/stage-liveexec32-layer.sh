@@ -12,6 +12,7 @@ The extended form stages one deterministic compatibility test bundle:
   Documents/<relative-name>
   Documents/LiveExec32Runtime/rootfs
   Documents/LiveExec32Runtime/TestApps/<bundle-id>.app
+  Documents/LiveExec32Runtime/Data/<bundle-id>
   Documents/LiveExec32Runtime/launch.plist
   Documents/LiveExec32Runtime/Logs
 EOF
@@ -95,12 +96,13 @@ python3 "$script_dir/validate-armv7-ipa.py" "$ipa"
 runtime=$documents_dir/LiveExec32Runtime
 staged_rootfs=$runtime/rootfs
 test_apps=$runtime/TestApps
+data_root=$runtime/Data
 logs=$runtime/Logs
 work=$(mktemp -d "${TMPDIR:-/tmp}/lc32-stage.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 rm -rf "$runtime"
-mkdir -p "$runtime" "$test_apps" "$logs"
+mkdir -p "$runtime" "$test_apps" "$data_root" "$logs"
 cp -R "$rootfs" "$staged_rootfs"
 unzip -q "$ipa" -d "$work"
 app=$(find "$work/Payload" -maxdepth 1 -type d -name '*.app' | head -n 1)
@@ -121,13 +123,21 @@ print(info['CFBundleExecutable'])
 PY
 )
 staged_app=$test_apps/$bundle_id.app
+guest_home=$data_root/$bundle_id
 cp -R "$app" "$staged_app"
+chmod u+x "$staged_app/$executable" || true
 ipa_sha=$(shasum -a 256 "$ipa" | awk '{print $1}')
 exec_sha=$(shasum -a 256 "$staged_app/$executable" | awk '{print $1}')
 
-python3 - "$runtime/launch.plist" "$relative_name" "$staged_rootfs" "$staged_app" "$executable" "$bundle_id" "$ipa_sha" "$exec_sha" "$logs" <<'PY'
+mkdir -p "$guest_home/Documents" \
+         "$guest_home/Library/Preferences" \
+         "$guest_home/Library/Caches" \
+         "$guest_home/Library/Application Support" \
+         "$guest_home/tmp"
+
+python3 - "$runtime/launch.plist" "$relative_name" "$staged_rootfs" "$staged_app" "$executable" "$bundle_id" "$guest_home" "$ipa_sha" "$exec_sha" "$logs" <<'PY'
 import plistlib, sys
-(output, layer, rootfs, app, executable, bundle_id, ipa_sha, exec_sha, logs) = sys.argv[1:]
+(output, layer, rootfs, app, executable, bundle_id, guest_home, ipa_sha, exec_sha, logs) = sys.argv[1:]
 manifest = {
     'schemaVersion': 1,
     'translationLayerRelativePath': layer,
@@ -135,27 +145,42 @@ manifest = {
     'guestBundle': app,
     'guestExecutable': app + '/' + executable,
     'guestBundleIdentifier': bundle_id,
-    'guestHome': app + '/LiveExec32Data',
+    'guestHome': guest_home,
     'logDirectory': logs,
     'ipaSHA256': ipa_sha,
     'executableSHA256': exec_sha,
     'arguments': [],
     'environment': {
+        'CFFIXED_USER_HOME': guest_home,
+        'HOME': guest_home,
+        'TMPDIR': guest_home + '/tmp/',
         'LC32_BOOT_TRACE': '1',
         'LC32_STRICT_MACHO': '1',
     },
+    'proofGates': [
+        'manifest_loaded',
+        'rootfs_validated',
+        'guest_dyld_started',
+        'guest_executable_mapped',
+        'dependent_images_loaded',
+        'initializers_completed',
+        'main_reached',
+        'uiapplicationmain_reached',
+        'first_frame_presented',
+        'touch_received',
+        'audio_started',
+        'save_written',
+    ],
 }
 with open(output, 'wb') as f:
     plistlib.dump(manifest, f, fmt=plistlib.FMT_XML, sort_keys=True)
 PY
 
-mkdir -p "$staged_app/LiveExec32Data/Documents" \
-         "$staged_app/LiveExec32Data/Library/Preferences" \
-         "$staged_app/LiveExec32Data/Library/Caches" \
-         "$staged_app/LiveExec32Data/tmp"
+python3 "$script_dir/verify-liveexec32-runtime.py" "$runtime"
 
 echo "staged ARMv7 test app: $staged_app"
 echo "staged ARMv7 rootfs: $staged_rootfs"
+echo "guest data: $guest_home"
 echo "launch manifest: $runtime/launch.plist"
 echo "boot logs: $logs"
 echo "set Developer Settings > LiveExec32 .app path to: $relative_name"
