@@ -1,3 +1,4 @@
+#include "LC32BootSession.hpp"
 #include "LC32DyldBootSession.hpp"
 #include "LC32MachODependencies.hpp"
 #include "LC32MachOImports.hpp"
@@ -136,10 +137,6 @@ int LC32Main(int argc, char** argv) {
         const lc32::MachODependencyResult metadata =
             lc32::parseArmv7MachODependencies(appImage.data(), appImage.size());
         if (!metadata.ok) return failWith(70, "cleanroom-loader-parse-failed", metadata.error);
-        if (metadata.dependencies.empty()) {
-            return failWith(72, "cleanroom-loader-blocked",
-                            "application has no declared dependencies but direct entry startup is not implemented");
-        }
 
         const lc32::MachODependency* firstUnsupported = nullptr;
         for (const auto& dependency : metadata.dependencies) {
@@ -197,8 +194,33 @@ int LC32Main(int argc, char** argv) {
         if (!firstPlannedSymbol.empty()) {
             return failWith(75, "cleanroom-symbol-implementation-required", firstPlannedSymbol);
         }
-        return failWith(73, "cleanroom-binding-required",
-                        "base-runtime imports have executable clean-room implementations; bind indirect symbol pointers and enter ARMv7 main");
+
+        const uint64_t maxSteps = stepLimit();
+        logEvent("cleanroom-direct-boot-dispatch", executable, 0,
+                 static_cast<uint32_t>(maxSteps));
+        lc32::BootSession cleanroomSession;
+        lc32::BootResult cleanroomResult =
+            cleanroomSession.boot(appImage.data(), appImage.size(), maxSteps);
+        for (const lc32::BootEvent& event : cleanroomResult.events) {
+            logEvent(event.stage, event.detail, event.pc, event.value);
+        }
+        if (!cleanroomResult.loaded) {
+            const std::string detail = cleanroomResult.cpuResult.detail.empty()
+                ? cleanroomResult.image.error : cleanroomResult.cpuResult.detail;
+            return failWith(70, "cleanroom-boot-preparation-failed", detail);
+        }
+        if (cleanroomResult.exited) {
+            logEvent("cleanroom-guest-exited", std::to_string(cleanroomResult.exitCode),
+                     cleanroomResult.cpuResult.pc,
+                     static_cast<uint32_t>(cleanroomResult.cpuResult.steps));
+            return cleanroomResult.exitCode;
+        }
+        std::string detail = cleanroomResult.cpuResult.detail;
+        if (detail.empty()) detail = "ARMv7 guest stopped without exiting";
+        gLastError = "cleanroom-cpu-stop: " + detail;
+        logEvent("cleanroom-cpu-stop", detail, cleanroomResult.cpuResult.pc,
+                 cleanroomResult.cpuResult.instruction);
+        return 71;
     }
 
     lc32::DyldHandoffSpec spec;
