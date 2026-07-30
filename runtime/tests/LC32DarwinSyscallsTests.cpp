@@ -427,6 +427,77 @@ int main() {
     assert((bootstrapDescriptorWord >> 24u) == 0u);
     assert(bootstrapReturn == 0u);
 
+
+    const auto sendBootstrapLookup = [&](const std::string& serviceName) {
+        constexpr uint32_t kBootstrapRequestSize = 160u;
+        std::memset(lowMemory.data() + kMachMessageAddress, 0,
+                    kBootstrapRequestSize);
+        uint32_t header[6] = {
+            19u, kBootstrapRequestSize, 0x104u, replyName, 0u, 404u};
+        std::memcpy(lowMemory.data() + kMachMessageAddress,
+                    header,
+                    sizeof(header));
+        assert(serviceName.size() < 128u);
+        std::memcpy(lowMemory.data() + kMachMessageAddress + 32u,
+                    serviceName.c_str(),
+                    serviceName.size() + 1u);
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachSendMsg;
+        state.r[2] = kBootstrapRequestSize;
+        const auto sent = syscalls.dispatch(state, 0, false);
+        assert(sent.handled && state.r[0] == 0u);
+    };
+    const auto receiveBootstrapReply = [&](uint32_t capacity) {
+        std::memset(lowMemory.data() + kMachMessageAddress, 0, capacity);
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachReceiveMsg;
+        state.r[3] = capacity;
+        state.r[4] = replyName;
+        return syscalls.dispatch(state, 0, false);
+    };
+
+    sendBootstrapLookup("com.apple.system.notification_center");
+    const auto lookupSuccess = receiveBootstrapReply(64u);
+    assert(lookupSuccess.handled && state.r[0] == 0u);
+    uint32_t lookupBits = 0;
+    uint32_t lookupSize = 0;
+    uint32_t lookupReplyId = 0;
+    uint32_t lookupDescriptorCount = 0;
+    uint32_t lookupPort = 0;
+    uint32_t lookupDisposition = 0;
+    uint32_t lookupReturn = 1;
+    std::memcpy(&lookupBits, lowMemory.data() + kMachMessageAddress, 4u);
+    std::memcpy(&lookupSize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&lookupReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&lookupDescriptorCount, lowMemory.data() + kMachMessageAddress + 24u, 4u);
+    std::memcpy(&lookupPort, lowMemory.data() + kMachMessageAddress + 28u, 4u);
+    std::memcpy(&lookupDisposition, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&lookupReturn, lowMemory.data() + kMachMessageAddress + 48u, 4u);
+    assert((lookupBits & 0x80000000u) != 0u);
+    assert(lookupSize == 52u && lookupReplyId == 504u);
+    assert(lookupDescriptorCount == 1u && lookupPort == 0x111u);
+    assert(((lookupDisposition >> 16u) & 0xffu) == 19u);
+    assert(lookupReturn == 0u);
+
+    sendBootstrapLookup("com.example.unsupported");
+    const auto lookupMissing = receiveBootstrapReply(64u);
+    assert(lookupMissing.handled && state.r[0] == 0u);
+    uint32_t missingBits = 1;
+    uint32_t missingSize = 0;
+    uint32_t missingReplyId = 0;
+    uint32_t missingReturn = 0;
+    std::memcpy(&missingBits, lowMemory.data() + kMachMessageAddress, 4u);
+    std::memcpy(&missingSize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&missingReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&missingReturn, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    assert((missingBits & 0x80000000u) == 0u);
+    assert(missingSize == 36u && missingReplyId == 504u);
+    assert(missingReturn == 1102u);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);

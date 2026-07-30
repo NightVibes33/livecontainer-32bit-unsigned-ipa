@@ -1328,6 +1328,9 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
     constexpr uint32_t kTaskPort = 0x102u;
     constexpr uint32_t kHostPort = 0x103u;
     constexpr uint32_t kBootstrapPort = 0x104u;
+    constexpr uint32_t kSystemLoggerPort = 0x110u;
+    constexpr uint32_t kNotificationCenterPort = 0x111u;
+    constexpr uint32_t kCfprefsdPort = 0x112u;
 
     constexpr uint32_t kMachPortRightSend = 0u;
     constexpr uint32_t kMachPortRightReceive = 1u;
@@ -1375,6 +1378,9 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         addBuiltin(kTaskPort);
         addBuiltin(kHostPort);
         addBuiltin(kBootstrapPort);
+        addBuiltin(kSystemLoggerPort);
+        addBuiltin(kNotificationCenterPort);
+        addBuiltin(kCfprefsdPort);
     };
     ensureBuiltinPorts();
 
@@ -1538,6 +1544,73 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         std::memcpy(reply.data() + 20u, &replyId, 4u);
         std::memcpy(reply.data() + 24u, &kDescriptorCount, 4u);
         std::memcpy(reply.data() + 28u, &kBootstrapPort, 4u);
+        std::memcpy(reply.data() + 36u, &kCopySendPortDescriptor, 4u);
+        std::memcpy(reply.data() + 40u, kNdr, sizeof(kNdr));
+        std::memcpy(reply.data() + 48u, &kKernSuccess, 4u);
+        replyPort->second.messages.push_back(std::move(reply));
+        return true;
+    };
+
+    const auto queueBootstrapLookupReply = [&](const std::vector<uint8_t>& request,
+                                                     uint32_t replyName) -> bool {
+        if (replyName == 0 || request.size() < 160u) return false;
+        auto replyPort = machPorts_.find(replyName);
+        if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0) {
+            return false;
+        }
+
+        uint32_t requestId = 0;
+        std::memcpy(&requestId, request.data() + 20u, sizeof(requestId));
+        if (requestId != 404u) return false;
+
+        const char* serviceBytes =
+            reinterpret_cast<const char*>(request.data() + 32u);
+        size_t serviceLength = 0;
+        while (serviceLength < 128u && serviceBytes[serviceLength] != '\0') {
+            ++serviceLength;
+        }
+        if (serviceLength == 128u) return false;
+        const std::string serviceName(serviceBytes, serviceLength);
+
+        uint32_t servicePort = 0;
+        if (serviceName == "com.apple.system.logger") {
+            servicePort = kSystemLoggerPort;
+        } else if (serviceName == "com.apple.system.notification_center") {
+            servicePort = kNotificationCenterPort;
+        } else if (serviceName == "com.apple.cfprefsd.daemon") {
+            servicePort = kCfprefsdPort;
+        }
+
+        constexpr uint8_t kNdr[8] = {0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u};
+        constexpr uint32_t kBootstrapUnknownService = 1102u;
+        if (servicePort == 0) {
+            std::vector<uint8_t> reply(36u, 0u);
+            const uint32_t size = static_cast<uint32_t>(reply.size());
+            const uint32_t local = replyName;
+            const uint32_t replyId = 504u;
+            std::memcpy(reply.data() + 4u, &size, 4u);
+            std::memcpy(reply.data() + 12u, &local, 4u);
+            std::memcpy(reply.data() + 20u, &replyId, 4u);
+            std::memcpy(reply.data() + 24u, kNdr, sizeof(kNdr));
+            std::memcpy(reply.data() + 32u, &kBootstrapUnknownService, 4u);
+            replyPort->second.messages.push_back(std::move(reply));
+            return true;
+        }
+
+        constexpr uint32_t kDescriptorCount = 1u;
+        constexpr uint32_t kCopySendPortDescriptor =
+            (kMachMsgTypeCopySend << 16u);
+        std::vector<uint8_t> reply(52u, 0u);
+        const uint32_t bits = kMachMessageComplex;
+        const uint32_t size = static_cast<uint32_t>(reply.size());
+        const uint32_t local = replyName;
+        const uint32_t replyId = 504u;
+        std::memcpy(reply.data(), &bits, 4u);
+        std::memcpy(reply.data() + 4u, &size, 4u);
+        std::memcpy(reply.data() + 12u, &local, 4u);
+        std::memcpy(reply.data() + 20u, &replyId, 4u);
+        std::memcpy(reply.data() + 24u, &kDescriptorCount, 4u);
+        std::memcpy(reply.data() + 28u, &servicePort, 4u);
         std::memcpy(reply.data() + 36u, &kCopySendPortDescriptor, 4u);
         std::memcpy(reply.data() + 40u, kNdr, sizeof(kNdr));
         std::memcpy(reply.data() + 48u, &kKernSuccess, 4u);
@@ -1730,7 +1803,11 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 const bool handledTaskSpecialPort =
                     destination == kTaskPort &&
                     queueTaskSpecialPortReply(message, replyName);
-                if (!handledHostMig && !handledTaskSpecialPort) {
+                const bool handledBootstrapLookup =
+                    destination == kBootstrapPort &&
+                    queueBootstrapLookupReply(message, replyName);
+                if (!handledHostMig && !handledTaskSpecialPort &&
+                    !handledBootstrapLookup) {
                     port->second.messages.push_back(std::move(message));
                 }
                 if (consumeSend) {
