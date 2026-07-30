@@ -15,6 +15,14 @@ on:
         description: 'Absolute persistent directory on the self-hosted runner'
         required: true
         default: '/Users/Shared/LiveContainer-iOSObscura-campaign'
+  push:
+    branches:
+      - feature/liveexec32-fixitfelix
+    paths:
+      - '.github/workflows/iosobscura-all-17000-single-runner.yml'
+      - 'tools/iosobscura-full-campaign.py'
+      - 'tools/compat32-report.py'
+      - 'tools/compat32-campaign-aggregate.py'
 
 permissions:
   contents: read
@@ -26,24 +34,24 @@ concurrency:
 jobs:
   validate-all:
     name: Build app and validate complete iOSObscura catalog
-    # Register one macOS machine with this custom label. The job stays on that one machine.
     runs-on: [self-hosted, macOS, iosobscura]
     timeout-minutes: 7200
     env:
       THEOS: ${{ runner.temp }}/theos
-      STATE_DIR: ${{ inputs.persistent_state_dir }}
+      STATE_DIR: ${{ inputs.persistent_state_dir || '/Users/Shared/LiveContainer-iOSObscura-campaign' }}
       LIVEEXEC_SOURCE: ${{ runner.temp }}/LiveExec32
       DERIVED_DATA: ${{ runner.temp }}/LiveContainerDerivedData
+      WORKERS: ${{ inputs.workers || '4' }}
+      AUTHORIZATION_ATTESTATION: ${{ inputs.authorization_attestation || 'I_HAVE_AUTHORIZATION' }}
     steps:
       - name: Require explicit authorization
         shell: bash
         run: |
           set -euo pipefail
-          test '${{ inputs.authorization_attestation }}' = 'I_HAVE_AUTHORIZATION' || {
+          test "$AUTHORIZATION_ATTESTATION" = 'I_HAVE_AUTHORIZATION' || {
             echo 'authorization_attestation must equal I_HAVE_AUTHORIZATION' >&2
             exit 1
           }
-          WORKERS='${{ inputs.workers }}'
           [[ "$WORKERS" =~ ^[0-9]+$ ]] && [ "$WORKERS" -ge 1 ] && [ "$WORKERS" -le 16 ] || {
             echo 'workers must be 1..16' >&2
             exit 1
@@ -72,16 +80,17 @@ jobs:
           submodules: recursive
           clean: true
 
-      - name: Prepare Theos and LiveExec32 source
+      - name: Prepare Theos and patched LiveExec32 source
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf "$THEOS" "$LIVEEXEC_SOURCE"
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
           git clone --recursive https://github.com/LiveContainer/LiveExec32.git "$LIVEEXEC_SOURCE"
+          python3 tools/apply-liveexec32-runtime-integration.py .
           perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' "$LIVEEXEC_SOURCE/Makefile"
 
-      - name: Build LiveExec32
+      - name: Build patched LiveExec32
         shell: bash
         run: |
           set -euxo pipefail
@@ -90,6 +99,7 @@ jobs:
           LIVEEXEC_APP=$(find "$LIVEEXEC_SOURCE/.theos" -type d -name LiveExec32.app -print -quit)
           test -n "$LIVEEXEC_APP"
           test -f "$LIVEEXEC_APP/LiveExec32"
+          strings "$LIVEEXEC_APP/LiveExec32" | grep -q 'LC32_GUEST_EXECUTABLE'
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
 
       - name: Build exact LiveContainer test IPA
@@ -118,16 +128,24 @@ jobs:
           tools/package-unsigned-ipa.sh "$APP" "$STATE_DIR/LiveContainer-compat32-campaign.ipa"
           test -f "$STATE_DIR/LiveContainer-compat32-campaign.ipa"
 
-      - name: Validate complete archive sequential campaign on this runner
+      - name: Validate complete archive on this runner
         shell: bash
         run: |
           set -o pipefail
           python3 tools/iosobscura-full-campaign.py \
             --authorized \
-            --workers '${{ inputs.workers }}' \
+            --workers "$WORKERS" \
             --livecontainer-ipa "$STATE_DIR/LiveContainer-compat32-campaign.ipa" \
             --output-dir "$STATE_DIR/results" \
             2>&1 | tee -a "$STATE_DIR/campaign.log"
+
+      - name: Aggregate compatibility blockers
+        if: always()
+        shell: bash
+        run: |
+          python3 tools/compat32-campaign-aggregate.py \
+            "$STATE_DIR/results" \
+            --output "$STATE_DIR/results/aggregate.json" || true
 
       - name: Publish final compact reports
         if: always()
@@ -135,9 +153,10 @@ jobs:
         with:
           name: iosobscura-all-17000-summary
           path: |
-            ${{ inputs.persistent_state_dir }}/results/summary.json
-            ${{ inputs.persistent_state_dir }}/results/results.jsonl
-            ${{ inputs.persistent_state_dir }}/results/catalog.json
-            ${{ inputs.persistent_state_dir }}/campaign.log
+            ${{ env.STATE_DIR }}/results/summary.json
+            ${{ env.STATE_DIR }}/results/aggregate.json
+            ${{ env.STATE_DIR }}/results/results.jsonl
+            ${{ env.STATE_DIR }}/results/catalog.json
+            ${{ env.STATE_DIR }}/campaign.log
           if-no-files-found: warn
           retention-days: 30
