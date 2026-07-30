@@ -437,7 +437,7 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             const uint32_t supported = kMsAsync | kMsInvalidate |
                                        kMsKillPages | kMsDeactivate | kMsSync;
             if ((flags & ~supported) != 0 ||
-                (flags & kMsAsync) != 0 && (flags & kMsSync) != 0) {
+                ((flags & kMsAsync) != 0 && (flags & kMsSync) != 0)) {
                 return fail(number, EINVAL, "msync flags");
             }
             if (length == 0 || length > kMaximumMapping ||
