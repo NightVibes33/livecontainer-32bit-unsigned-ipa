@@ -14,7 +14,7 @@ on:
       start_index:
         description: Zero-based archive index
         required: true
-        default: '0'
+        default: '1000'
       batch_size:
         description: Archive IPAs in this resumable batch
         required: true
@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: iosobscura-current-lc32-${{ github.event.pull_request.number || github.ref }}-${{ inputs.start_index || '0' }}
+  group: iosobscura-current-lc32-${{ github.event.pull_request.number || github.ref }}-${{ inputs.start_index || '1000' }}
   cancel-in-progress: true
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
       - id: config
         env:
           PR_SHA: ${{ github.event.pull_request.head.sha }}
-          START: ${{ inputs.start_index || '0' }}
+          START: ${{ inputs.start_index || '1000' }}
           BATCH: ${{ inputs.batch_size || '1000' }}
           SHARDS: ${{ inputs.shard_count || '40' }}
           MAX_BYTES: ${{ inputs.max_bytes_per_shard || '2147483648' }}
@@ -188,19 +188,23 @@ jobs:
           summary={'schemaVersion':2,'archive':'https://archive.org/download/iOSObscura','currentAppCommit':os.environ['HEAD_SHA'],
             'currentAppBuildRunId':int(os.environ['BUILD_RUN']),'currentAppIPASHA256':hashes,'totalCatalogIPAs':total,
             'batchStart':start,'batchEndExclusive':end,'nextStartIndex':end,'processed':len(rows),'skippedForByteBudget':skipped,
-            'classifications':dict(classes),'topDependencies':[{'dependency':k,'apps':v} for k,v in deps.most_common(250)],
-            'topFailures':[{'failure':k,'apps':v} for k,v in failures.most_common(100)],
-            'scope':'static integrity and compatibility against the exact current LC32 IPA; no physical-device execution claim'}
+            'classifications':dict(classes),'topDependencies':deps.most_common(250),'topFailures':failures.most_common(100),
+            'scope':'static integrity and compatibility against the exact current LC32 IPA'}
           (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
-          (out/'apps.json').write_text(json.dumps(rows,indent=2,sort_keys=True)+'\n')
-          md=['# iOSObscura → Current LC32', '',f"Catalog: **{total}**",f"Processed: **{len(rows)}**",f"Next index: **{end}**",'',
-              '| Classification | Apps |','|---|---:|']+[f'| {k} | {v} |' for k,v in classes.most_common()]
+          (out/'results.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows))
+          md=['# iOSObscura against current LC32 app','',f"Processed **{len(rows)}** archive IPAs from index **{start}** to **{end-1}**.",'',
+              f"Current app commit: `{os.environ['HEAD_SHA']}`",f"Build run: `{os.environ['BUILD_RUN']}`",f"Next index: **{end}**",'',
+              '## Classifications','', '| Class | Count |','|---|---:|']
+          md += [f'| {k} | {v} |' for k,v in classes.most_common()]
+          md += ['', '## Top dependencies','', '| Dependency | Apps |','|---|---:|']
+          md += [f'| `{k}` | {v} |' for k,v in deps.most_common(100)]
           (out/'report.md').write_text('\n'.join(md)+'\n')
           print(json.dumps(summary,indent=2))
           PY
-          cat campaign-final/report.md >> "$GITHUB_STEP_SUMMARY"
+      - run: cat campaign-final/report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: iosobscura-current-lc32-batch-${{ needs.prepare.outputs.start_index }}
           path: campaign-final
+          if-no-files-found: error
           retention-days: 90
