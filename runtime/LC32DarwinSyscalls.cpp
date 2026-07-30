@@ -46,6 +46,26 @@ constexpr uint32_t kMsDeactivate = 0x0008u;
 constexpr uint32_t kMsSync = 0x0010u;
 constexpr int kMaximumAdvice = 9;
 
+constexpr int32_t kCtlKern = 1;
+constexpr int32_t kCtlHw = 6;
+constexpr int32_t kKernOsType = 1;
+constexpr int32_t kKernOsRelease = 2;
+constexpr int32_t kKernOsRevision = 3;
+constexpr int32_t kKernVersion = 4;
+constexpr int32_t kKernOsVersion = 65;
+constexpr int32_t kHwMachine = 1;
+constexpr int32_t kHwModel = 2;
+constexpr int32_t kHwCpuCount = 3;
+constexpr int32_t kHwByteOrder = 4;
+constexpr int32_t kHwPhysicalMemory = 5;
+constexpr int32_t kHwUserMemory = 6;
+constexpr int32_t kHwPageSize = 7;
+constexpr int32_t kHwFloatingPoint = 11;
+constexpr int32_t kHwMachineArch = 12;
+constexpr int32_t kHwMemorySize = 24;
+constexpr int32_t kHwAvailableCpu = 25;
+constexpr uint32_t kCtlMaximumName = 12u;
+
 #pragma pack(push, 4)
 struct GuestTimespec32 {
     int32_t seconds = 0;
@@ -741,6 +761,146 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, errno, "lseek host call");
             }
             return ok64(state, number, static_cast<int64_t>(position), "lseek");
+        }
+        case 202: {
+            const uint32_t nameAddress = state.r[0];
+            const uint32_t nameLength = state.r[1];
+            const uint32_t oldAddress = state.r[2];
+            const uint32_t oldLengthAddress = state.r[3];
+            if (nameLength == 0 || nameLength > kCtlMaximumName) {
+                return fail(number, EINVAL, "sysctl name length");
+            }
+            if (!memory_.read || !memory_.write || oldLengthAddress == 0) {
+                return fail(number, EFAULT, "sysctl memory callbacks");
+            }
+
+            uint32_t stackNewAddress = 0;
+            uint32_t stackNewLength = 0;
+            if (!addAddress(state.r[13], 0u, stackNewAddress) ||
+                !addAddress(state.r[13], 4u, stackNewLength)) {
+                return fail(number, EFAULT, "sysctl stack address");
+            }
+            uint32_t newAddress = 0;
+            uint32_t newLength = 0;
+            if (!memory_.read(stackNewAddress, &newAddress, sizeof(newAddress)) ||
+                !memory_.read(stackNewLength, &newLength, sizeof(newLength))) {
+                return fail(number, EFAULT, "sysctl stack read");
+            }
+            if (newAddress != 0 || newLength != 0) {
+                return fail(number, EPERM, "sysctl read-only profile");
+            }
+
+            std::vector<int32_t> mib(nameLength);
+            if (!memory_.read(nameAddress,
+                              mib.data(),
+                              mib.size() * sizeof(mib.front()))) {
+                return fail(number, EFAULT, "sysctl name read");
+            }
+            if (mib.size() != 2u) {
+                return fail(number, ENOENT, "sysctl unsupported MIB depth");
+            }
+
+            std::vector<uint8_t> payload;
+            const auto setString = [&](const char* value) {
+                const size_t length = std::strlen(value) + 1u;
+                payload.assign(reinterpret_cast<const uint8_t*>(value),
+                               reinterpret_cast<const uint8_t*>(value) + length);
+            };
+            const auto setInt32 = [&](int32_t value) {
+                payload.resize(sizeof(value));
+                std::memcpy(payload.data(), &value, sizeof(value));
+            };
+            const auto setUInt64 = [&](uint64_t value) {
+                payload.resize(sizeof(value));
+                std::memcpy(payload.data(), &value, sizeof(value));
+            };
+
+            if (mib[0] == kCtlKern) {
+                switch (mib[1]) {
+                    case kKernOsType:
+                        setString("Darwin");
+                        break;
+                    case kKernOsRelease:
+                        setString("12.5.0");
+                        break;
+                    case kKernOsRevision:
+                        setInt32(199506);
+                        break;
+                    case kKernVersion:
+                        setString("Darwin Kernel Version 12.5.0: LC32 deterministic ARMv7 profile");
+                        break;
+                    case kKernOsVersion:
+                        setString("10B329");
+                        break;
+                    default:
+                        return fail(number, ENOENT, "sysctl unsupported kern MIB");
+                }
+            } else if (mib[0] == kCtlHw) {
+                switch (mib[1]) {
+                    case kHwMachine:
+                        setString("iPhone5,2");
+                        break;
+                    case kHwModel:
+                        setString("N42AP");
+                        break;
+                    case kHwCpuCount:
+                    case kHwAvailableCpu:
+                        setInt32(2);
+                        break;
+                    case kHwByteOrder:
+                        setInt32(1234);
+                        break;
+                    case kHwPhysicalMemory:
+                        setInt32(1024 * 1024 * 1024);
+                        break;
+                    case kHwUserMemory:
+                        setInt32(768 * 1024 * 1024);
+                        break;
+                    case kHwPageSize:
+                        setInt32(static_cast<int32_t>(kPageSize));
+                        break;
+                    case kHwFloatingPoint:
+                        setInt32(1);
+                        break;
+                    case kHwMachineArch:
+                        setString("arm");
+                        break;
+                    case kHwMemorySize:
+                        setUInt64(1024ull * 1024ull * 1024ull);
+                        break;
+                    default:
+                        return fail(number, ENOENT, "sysctl unsupported hw MIB");
+                }
+            } else {
+                return fail(number, ENOENT, "sysctl unsupported root MIB");
+            }
+
+            if (payload.size() > UINT32_MAX) {
+                return fail(number, ENOMEM, "sysctl payload length");
+            }
+            uint32_t suppliedLength = 0;
+            if (!memory_.read(oldLengthAddress,
+                              &suppliedLength,
+                              sizeof(suppliedLength))) {
+                return fail(number, EFAULT, "sysctl old length read");
+            }
+            const uint32_t requiredLength = static_cast<uint32_t>(payload.size());
+            if (!memory_.write(oldLengthAddress,
+                               &requiredLength,
+                               sizeof(requiredLength))) {
+                return fail(number, EFAULT, "sysctl old length write");
+            }
+            if (oldAddress == 0) {
+                return ok(number, 0, "sysctl size query");
+            }
+            if (suppliedLength < requiredLength) {
+                return fail(number, ENOMEM, "sysctl output too small");
+            }
+            if (!payload.empty() &&
+                !memory_.write(oldAddress, payload.data(), payload.size())) {
+                return fail(number, EFAULT, "sysctl output write");
+            }
+            return ok(number, 0, "sysctl");
         }
         case 338: {
             std::string path;
