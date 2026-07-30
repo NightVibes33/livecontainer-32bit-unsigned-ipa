@@ -1,4 +1,4 @@
-name: Test LC32 No-JIT Interpreter
+name: Test LC32 No-JIT Runtime
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  interpreter-tests:
+  no-jit-runtime-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -31,3 +31,12 @@ jobs:
             -o lc32-interpreter-tests
       - name: Run interpreter tests
         run: ./lc32-interpreter-tests
+      - name: Build ARMv7 Mach-O loader tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32MachOLoader.cpp \
+            runtime/tests/LC32MachOLoaderTests.cpp \
+            -o lc32-macho-loader-tests
+      - name: Run ARMv7 Mach-O loader tests
+        run: ./lc32-macho-loader-tests
