@@ -146,6 +146,20 @@ int main() {
     assert(state.r[0] == 0x102u);
 
 
+    constexpr uint32_t kMachNameAddress = 0x0080u;
+    constexpr uint32_t kMachMessageAddress = 0x0100u;
+    constexpr uint32_t kMachSendMsg = 0x00000001u;
+    constexpr uint32_t kMachReceiveMsg = 0x00000002u;
+    constexpr uint32_t kMachMsgTypeMakeSend = 20u;
+    constexpr uint32_t kMachPortRightSend = 0u;
+    constexpr uint32_t kMachPortRightReceive = 1u;
+    constexpr uint32_t kKernInvalidName = 15u;
+    constexpr uint32_t kKernInvalidRight = 17u;
+    constexpr uint32_t kMachSendInvalidRight = 0x1000000au;
+    constexpr uint32_t kMachReceiveInvalidName = 0x10004002u;
+    constexpr uint32_t kMachReceiveTimedOut = 0x10004003u;
+    constexpr uint32_t kMachReceiveTooLarge = 0x10004004u;
+
     state = {};
     state.r[12] = static_cast<uint32_t>(-26);
     const auto replyPort = syscalls.dispatch(state, 0, false);
@@ -153,11 +167,6 @@ int main() {
     const uint32_t replyName = state.r[0];
     assert(replyName >= 0x200u);
 
-    constexpr uint32_t kMachMessageAddress = 0x0100u;
-    constexpr uint32_t kMachSendMsg = 0x00000001u;
-    constexpr uint32_t kMachReceiveMsg = 0x00000002u;
-    constexpr uint32_t kMachReceiveTimedOut = 0x10004003u;
-    constexpr uint32_t kMachReceiveTooLarge = 0x10004004u;
     uint32_t messageHeader[6] = {19u, 28u, replyName, 0u, 0u, 0x1234u};
     uint32_t payloadWord = 0xfeedfaceu;
     std::memcpy(lowMemory.data() + kMachMessageAddress,
@@ -166,6 +175,23 @@ int main() {
     std::memcpy(lowMemory.data() + kMachMessageAddress + sizeof(messageHeader),
                 &payloadWord,
                 sizeof(payloadWord));
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachSendMsg;
+    state.r[2] = 28u;
+    const auto sendWithoutRight = syscalls.dispatch(state, 0, false);
+    assert(sendWithoutRight.handled && state.r[0] == kMachSendInvalidRight);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-21);
+    state.r[0] = 0x102u;
+    state.r[1] = replyName;
+    state.r[2] = replyName;
+    state.r[3] = kMachMsgTypeMakeSend;
+    const auto makeSend = syscalls.dispatch(state, 0, false);
+    assert(makeSend.handled && state.r[0] == 0u);
 
     state = {};
     state.r[12] = static_cast<uint32_t>(-31);
@@ -207,6 +233,76 @@ int main() {
     state.r[4] = replyName;
     const auto machEmptyReceive = syscalls.dispatch(state, 0, false);
     assert(machEmptyReceive.handled && state.r[0] == kMachReceiveTimedOut);
+
+    std::memset(lowMemory.data() + kMachNameAddress, 0, sizeof(uint32_t));
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-16);
+    state.r[0] = 0x102u;
+    state.r[1] = kMachPortRightReceive;
+    state.r[2] = kMachNameAddress;
+    const auto allocatedPort = syscalls.dispatch(state, 0, false);
+    assert(allocatedPort.handled && state.r[0] == 0u);
+    uint32_t allocatedName = 0;
+    std::memcpy(&allocatedName,
+                lowMemory.data() + kMachNameAddress,
+                sizeof(allocatedName));
+    assert(allocatedName >= 0x200u && allocatedName != replyName);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-21);
+    state.r[0] = 0x102u;
+    state.r[1] = allocatedName;
+    state.r[2] = allocatedName;
+    state.r[3] = kMachMsgTypeMakeSend;
+    const auto allocatedMakeSend = syscalls.dispatch(state, 0, false);
+    assert(allocatedMakeSend.handled && state.r[0] == 0u);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-19);
+    state.r[0] = 0x102u;
+    state.r[1] = allocatedName;
+    state.r[2] = kMachPortRightSend;
+    state.r[3] = 1u;
+    const auto addSendRef = syscalls.dispatch(state, 0, false);
+    assert(addSendRef.handled && state.r[0] == 0u);
+
+    for (int index = 0; index < 2; ++index) {
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-18);
+        state.r[0] = 0x102u;
+        state.r[1] = allocatedName;
+        const auto deallocated = syscalls.dispatch(state, 0, false);
+        assert(deallocated.handled && state.r[0] == 0u);
+    }
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-18);
+    state.r[0] = 0x102u;
+    state.r[1] = allocatedName;
+    const auto missingSendRef = syscalls.dispatch(state, 0, false);
+    assert(missingSendRef.handled && state.r[0] == kKernInvalidRight);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-17);
+    state.r[0] = 0x102u;
+    state.r[1] = allocatedName;
+    const auto destroyedPort = syscalls.dispatch(state, 0, false);
+    assert(destroyedPort.handled && state.r[0] == 0u);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-17);
+    state.r[0] = 0x102u;
+    state.r[1] = allocatedName;
+    const auto destroyMissing = syscalls.dispatch(state, 0, false);
+    assert(destroyMissing.handled && state.r[0] == kKernInvalidName);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 32u;
+    state.r[4] = allocatedName;
+    const auto receiveDestroyed = syscalls.dispatch(state, 0, false);
+    assert(receiveDestroyed.handled && state.r[0] == kMachReceiveInvalidName);
 
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);

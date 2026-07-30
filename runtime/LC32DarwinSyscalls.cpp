@@ -1324,17 +1324,37 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
 }
 
 TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
-    constexpr uint32_t kReplyPort = 0x100u;
     constexpr uint32_t kThreadPort = 0x101u;
     constexpr uint32_t kTaskPort = 0x102u;
     constexpr uint32_t kHostPort = 0x103u;
+
+    constexpr uint32_t kMachPortRightSend = 0u;
+    constexpr uint32_t kMachPortRightReceive = 1u;
+    constexpr uint32_t kMachPortRightSendOnce = 2u;
+
+    constexpr uint32_t kMachMsgTypeMoveSend = 17u;
+    constexpr uint32_t kMachMsgTypeMoveSendOnce = 18u;
+    constexpr uint32_t kMachMsgTypeCopySend = 19u;
+    constexpr uint32_t kMachMsgTypeMakeSend = 20u;
+    constexpr uint32_t kMachMsgTypeMakeSendOnce = 21u;
+
     constexpr uint32_t kMachSendMsg = 0x00000001u;
     constexpr uint32_t kMachReceiveMsg = 0x00000002u;
     constexpr uint32_t kMachMessageComplex = 0x80000000u;
-    constexpr uint32_t kMachSuccess = 0u;
+    constexpr uint32_t kMachRemoteDispositionMask = 0xffu;
+
+    constexpr uint32_t kKernSuccess = 0u;
+    constexpr uint32_t kKernInvalidArgument = 4u;
+    constexpr uint32_t kKernInvalidName = 15u;
+    constexpr uint32_t kKernInvalidTask = 16u;
+    constexpr uint32_t kKernInvalidRight = 17u;
+    constexpr uint32_t kKernInvalidValue = 18u;
+    constexpr uint32_t kKernUrefsOverflow = 19u;
+
     constexpr uint32_t kMachSendInvalidData = 0x10000002u;
     constexpr uint32_t kMachSendInvalidDestination = 0x10000003u;
     constexpr uint32_t kMachSendMessageTooSmall = 0x10000008u;
+    constexpr uint32_t kMachSendInvalidRight = 0x1000000au;
     constexpr uint32_t kMachReceiveInvalidName = 0x10004002u;
     constexpr uint32_t kMachReceiveTimedOut = 0x10004003u;
     constexpr uint32_t kMachReceiveTooLarge = 0x10004004u;
@@ -1342,23 +1362,187 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
     constexpr uint32_t kMaximumMachMessage = 1024u * 1024u;
 
     const auto ensureBuiltinPorts = [&]() {
-        machPorts_.try_emplace(kReplyPort);
-        machPorts_.try_emplace(kThreadPort);
-        machPorts_.try_emplace(kTaskPort);
-        machPorts_.try_emplace(kHostPort);
+        const auto addBuiltin = [&](uint32_t name) {
+            auto [it, inserted] = machPorts_.try_emplace(name);
+            if (inserted) {
+                it->second.receiveRefs = 1;
+                it->second.sendRefs = 1;
+                it->second.immortal = true;
+            }
+        };
+        addBuiltin(kThreadPort);
+        addBuiltin(kTaskPort);
+        addBuiltin(kHostPort);
     };
     ensureBuiltinPorts();
 
+    const auto validTask = [&](uint32_t task) {
+        return task == kTaskPort;
+    };
+    const auto allocateReceivePort = [&]() -> uint32_t {
+        uint32_t candidate = nextMachPort_;
+        while (candidate == 0 || machPorts_.find(candidate) != machPorts_.end()) {
+            ++candidate;
+            if (candidate < 0x200u) candidate = 0x200u;
+        }
+        nextMachPort_ = candidate + 1u;
+        MachPort port;
+        port.receiveRefs = 1;
+        machPorts_.emplace(candidate, std::move(port));
+        return candidate;
+    };
+    const auto maybeErasePort = [&](uint32_t name) {
+        const auto it = machPorts_.find(name);
+        if (it == machPorts_.end() || it->second.immortal) return;
+        if (it->second.receiveRefs == 0 && it->second.sendRefs == 0 &&
+            it->second.sendOnceRefs == 0) {
+            machPorts_.erase(it);
+        }
+    };
+    const auto adjustRefs = [&](uint32_t name,
+                                uint32_t right,
+                                int32_t delta) -> uint32_t {
+        auto it = machPorts_.find(name);
+        if (it == machPorts_.end()) return kKernInvalidName;
+        uint32_t* refs = nullptr;
+        switch (right) {
+            case kMachPortRightSend:
+                refs = &it->second.sendRefs;
+                break;
+            case kMachPortRightReceive:
+                refs = &it->second.receiveRefs;
+                break;
+            case kMachPortRightSendOnce:
+                refs = &it->second.sendOnceRefs;
+                break;
+            default:
+                return kKernInvalidRight;
+        }
+        if (right == kMachPortRightReceive) {
+            const int64_t updated = static_cast<int64_t>(*refs) + delta;
+            if (updated < 0 || updated > 1) return kKernInvalidValue;
+            *refs = static_cast<uint32_t>(updated);
+        } else if (delta < 0) {
+            const uint32_t magnitude = static_cast<uint32_t>(-static_cast<int64_t>(delta));
+            if (magnitude > *refs) return kKernInvalidRight;
+            *refs -= magnitude;
+        } else {
+            const uint64_t updated = static_cast<uint64_t>(*refs) +
+                                     static_cast<uint32_t>(delta);
+            if (updated > UINT32_MAX) return kKernUrefsOverflow;
+            *refs = static_cast<uint32_t>(updated);
+        }
+        maybeErasePort(name);
+        return kKernSuccess;
+    };
+
     switch (number) {
-        case 26: {
-            uint32_t candidate = nextMachPort_;
-            while (candidate == 0 || machPorts_.find(candidate) != machPorts_.end()) {
-                ++candidate;
-                if (candidate < 0x200u) candidate = 0x200u;
+        case 16: {
+            if (!validTask(state.r[0])) {
+                return ok(number, static_cast<int32_t>(kKernInvalidTask),
+                          "mach_port_allocate invalid task");
             }
-            nextMachPort_ = candidate + 1u;
-            machPorts_.try_emplace(candidate);
-            return ok(number, static_cast<int32_t>(candidate), "mach_reply_port");
+            if (state.r[1] != kMachPortRightReceive) {
+                return ok(number, static_cast<int32_t>(kKernInvalidRight),
+                          "mach_port_allocate unsupported right");
+            }
+            if (!memory_.write) {
+                return ok(number, static_cast<int32_t>(kKernInvalidArgument),
+                          "mach_port_allocate memory callback");
+            }
+            const uint32_t name = allocateReceivePort();
+            if (!memory_.write(state.r[2], &name, sizeof(name))) {
+                machPorts_.erase(name);
+                return ok(number, static_cast<int32_t>(kKernInvalidArgument),
+                          "mach_port_allocate guest write");
+            }
+            return ok(number, static_cast<int32_t>(kKernSuccess),
+                      "mach_port_allocate");
+        }
+        case 17: {
+            if (!validTask(state.r[0])) {
+                return ok(number, static_cast<int32_t>(kKernInvalidTask),
+                          "mach_port_destroy invalid task");
+            }
+            const auto it = machPorts_.find(state.r[1]);
+            if (it == machPorts_.end()) {
+                return ok(number, static_cast<int32_t>(kKernInvalidName),
+                          "mach_port_destroy invalid name");
+            }
+            if (it->second.immortal) {
+                return ok(number, static_cast<int32_t>(kKernInvalidRight),
+                          "mach_port_destroy immortal port");
+            }
+            machPorts_.erase(it);
+            return ok(number, static_cast<int32_t>(kKernSuccess),
+                      "mach_port_destroy");
+        }
+        case 18: {
+            if (!validTask(state.r[0])) {
+                return ok(number, static_cast<int32_t>(kKernInvalidTask),
+                          "mach_port_deallocate invalid task");
+            }
+            auto it = machPorts_.find(state.r[1]);
+            if (it == machPorts_.end()) {
+                return ok(number, static_cast<int32_t>(kKernInvalidName),
+                          "mach_port_deallocate invalid name");
+            }
+            uint32_t result = kKernInvalidRight;
+            if (it->second.sendRefs != 0) {
+                result = adjustRefs(state.r[1], kMachPortRightSend, -1);
+            } else if (it->second.sendOnceRefs != 0) {
+                result = adjustRefs(state.r[1], kMachPortRightSendOnce, -1);
+            }
+            return ok(number, static_cast<int32_t>(result),
+                      "mach_port_deallocate");
+        }
+        case 19: {
+            if (!validTask(state.r[0])) {
+                return ok(number, static_cast<int32_t>(kKernInvalidTask),
+                          "mach_port_mod_refs invalid task");
+            }
+            const uint32_t result = adjustRefs(state.r[1],
+                                               state.r[2],
+                                               static_cast<int32_t>(state.r[3]));
+            return ok(number, static_cast<int32_t>(result), "mach_port_mod_refs");
+        }
+        case 21: {
+            if (!validTask(state.r[0])) {
+                return ok(number, static_cast<int32_t>(kKernInvalidTask),
+                          "mach_port_insert_right invalid task");
+            }
+            const uint32_t name = state.r[1];
+            const uint32_t poly = state.r[2];
+            const uint32_t disposition = state.r[3];
+            auto it = machPorts_.find(name);
+            if (name == 0 || name != poly || it == machPorts_.end()) {
+                return ok(number, static_cast<int32_t>(kKernInvalidName),
+                          "mach_port_insert_right invalid name");
+            }
+            uint32_t result = kKernInvalidValue;
+            if (disposition == kMachMsgTypeMakeSend) {
+                result = it->second.receiveRefs != 0
+                             ? adjustRefs(name, kMachPortRightSend, 1)
+                             : kKernInvalidRight;
+            } else if (disposition == kMachMsgTypeMakeSendOnce) {
+                result = it->second.receiveRefs != 0
+                             ? adjustRefs(name, kMachPortRightSendOnce, 1)
+                             : kKernInvalidRight;
+            } else if (disposition == kMachMsgTypeCopySend) {
+                result = it->second.sendRefs != 0
+                             ? adjustRefs(name, kMachPortRightSend, 1)
+                             : kKernInvalidRight;
+            } else if (disposition == kMachMsgTypeMoveSend) {
+                result = it->second.sendRefs != 0 ? kKernSuccess : kKernInvalidRight;
+            } else if (disposition == kMachMsgTypeMoveSendOnce) {
+                result = it->second.sendOnceRefs != 0 ? kKernSuccess : kKernInvalidRight;
+            }
+            return ok(number, static_cast<int32_t>(result),
+                      "mach_port_insert_right");
+        }
+        case 26: {
+            const uint32_t name = allocateReceivePort();
+            return ok(number, static_cast<int32_t>(name), "mach_reply_port");
         }
         case 27:
             return ok(number, static_cast<int32_t>(kThreadPort), "thread_self_trap");
@@ -1375,7 +1559,7 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
             const bool send = (options & kMachSendMsg) != 0;
             const bool receive = (options & kMachReceiveMsg) != 0;
             if (!send && !receive) {
-                return ok(number, static_cast<int32_t>(kMachSuccess), "mach_msg no-op");
+                return ok(number, static_cast<int32_t>(kKernSuccess), "mach_msg no-op");
             }
 
             if (send) {
@@ -1408,13 +1592,40 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                     return ok(number, static_cast<int32_t>(kMachSendInvalidDestination),
                               "mach_msg invalid destination");
                 }
+                const uint32_t disposition = bits & kMachRemoteDispositionMask;
+                bool consumeSend = false;
+                bool consumeSendOnce = false;
+                bool hasRight = false;
+                if (disposition == kMachMsgTypeCopySend) {
+                    hasRight = port->second.sendRefs != 0;
+                } else if (disposition == kMachMsgTypeMoveSend) {
+                    hasRight = port->second.sendRefs != 0;
+                    consumeSend = hasRight;
+                } else if (disposition == kMachMsgTypeMoveSendOnce) {
+                    hasRight = port->second.sendOnceRefs != 0;
+                    consumeSendOnce = hasRight;
+                } else if (disposition == kMachMsgTypeMakeSend) {
+                    hasRight = port->second.receiveRefs != 0;
+                } else if (disposition == kMachMsgTypeMakeSendOnce) {
+                    hasRight = port->second.receiveRefs != 0;
+                }
+                if (!hasRight) {
+                    return ok(number, static_cast<int32_t>(kMachSendInvalidRight),
+                              "mach_msg missing send right");
+                }
                 message.resize(headerSize);
                 port->second.messages.push_back(std::move(message));
+                if (consumeSend) {
+                    (void)adjustRefs(destination, kMachPortRightSend, -1);
+                } else if (consumeSendOnce) {
+                    (void)adjustRefs(destination, kMachPortRightSendOnce, -1);
+                }
             }
 
             if (receive) {
                 auto port = machPorts_.find(receiveName);
-                if (receiveName == 0 || port == machPorts_.end()) {
+                if (receiveName == 0 || port == machPorts_.end() ||
+                    port->second.receiveRefs == 0) {
                     return ok(number, static_cast<int32_t>(kMachReceiveInvalidName),
                               "mach_msg invalid receive name");
                 }
@@ -1434,7 +1645,7 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 }
                 port->second.messages.pop_front();
             }
-            return ok(number, static_cast<int32_t>(kMachSuccess), "mach_msg_trap");
+            return ok(number, static_cast<int32_t>(kKernSuccess), "mach_msg_trap");
         }
         default: {
             TrapResult result;

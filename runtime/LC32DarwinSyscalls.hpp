@@ -58,6 +58,10 @@ private:
 
     struct MachPort {
         std::deque<std::vector<uint8_t>> messages;
+        uint32_t receiveRefs = 0;
+        uint32_t sendRefs = 0;
+        uint32_t sendOnceRefs = 0;
+        bool immortal = false;
     };
 
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
