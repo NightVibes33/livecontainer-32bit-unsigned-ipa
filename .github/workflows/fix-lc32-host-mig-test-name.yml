@@ -1,0 +1,25 @@
+name: Fix LC32 Host MIG Test Name
+
+on:
+  pull_request:
+    paths:
+      - 'tools/fix-lc32-host-mig-test-name.py'
+      - '.github/workflows/fix-lc32-host-mig-test-name.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-host-mig-test-name:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/liveexec32-fixitfelix
+      - run: python3 tools/fix-lc32-host-mig-test-name.py
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add runtime/tests/LC32DarwinSyscallsTests.cpp
+          git commit -m 'Fix host MIG test variable name'
+          git push origin HEAD:feature/liveexec32-fixitfelix
