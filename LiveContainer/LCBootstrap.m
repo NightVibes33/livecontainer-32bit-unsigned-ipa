@@ -173,7 +173,8 @@ static BOOL checkJITEnabled() {
     return YES;
 #else
     if([lcUserDefaults boolForKey:@"LCIgnoreJITOnLaunch"]) {
-        return NO;
+        // Explicit developer override: skip the launch-time JIT gate.
+        return YES;
     }
     // check if jailbroken
     if (access("/var/mobile", R_OK) == 0) {
