@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - 'runtime/**'
+      - 'tools/fix-lc32-interpreter-mask.py'
       - '.github/workflows/test-lc32-interpreter.yml'
 
 permissions:
@@ -16,6 +17,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      - name: Apply decoder correctness fixes
+        run: |
+          set -euxo pipefail
+          python3 tools/fix-lc32-interpreter-mask.py
+          grep -q '0x0ff00000u' runtime/LC32Interpreter.cpp
       - name: Build interpreter tests
         run: |
           set -euxo pipefail
