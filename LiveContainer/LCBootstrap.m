@@ -674,16 +674,10 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         is32bit = true;
     }
     if(is32bit) {
-        if (!isJitEnabled) {
-            isJitEnabled = waitForJITEnabled(80, 1000 * 100);
-            if(isJitEnabled) {
-                init_bypassDyldLibValidation();
-            }
-        }
-        if (!isJitEnabled) {
-            return @"JIT is required to run 32-bit apps through LiveExec32.";
-        }
-        
+        // LiveExec32 now executes ARMv7 through the bundled no-JIT interpreter.
+        // Do not block 32-bit guests on host JIT availability.
+        NSLog(@"[LCBootstrap] Launching 32-bit guest through no-JIT LiveExec32 runtime.");
+
         NSString *selected32BitLayerExecPath = nil;
         NSString *resolveError = nil;
         NSString *selected32BitLayerPath = LCResolve32BitLayerPath(docPath, [lcUserDefaults stringForKey:@"selected32BitLayer"], &selected32BitLayerExecPath, &resolveError);
