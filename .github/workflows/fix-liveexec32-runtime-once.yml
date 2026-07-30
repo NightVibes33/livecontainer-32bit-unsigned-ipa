@@ -26,58 +26,54 @@ jobs:
 
           bootstrap = Path('LiveContainer/LCBootstrap.m')
           text = bootstrap.read_text()
-          old = '''    if(is32bit) {
-                  if (!isJitEnabled) {
-                      isJitEnabled = waitForJITEnabled(80, 1000 * 100);
-                      if(isJitEnabled) {
-                          init_bypassDyldLibValidation();
-                      }
-                  }
-                  if (!isJitEnabled) {
-                      return @"JIT is required to run 32-bit apps through LiveExec32.";
-                  }
-                  
-                  NSString *selected32BitLayerExecPath = nil;'''
-          new = '''    if(is32bit) {
-                  // Do not reject ARMv7 guests before the integrated runtime starts.
-                  // LiveExec32 owns backend diagnostics; the host resolves the runtime
-                  // and forwards the guest executable.
-                  if(!isJitEnabled) {
-                      NSLog(@"[LCBootstrap] Starting LiveExec32 without the legacy host JIT gate.");
-                  }
-                  
-                  NSString *selected32BitLayerExecPath = nil;'''
-          if old not in text:
-              raise SystemExit('Expected LiveExec32 JIT gate block was not found')
-          bootstrap.write_text(text.replace(old, new, 1))
+          section = text.index('#if is32BitSupported', text.index('DyldHooksInit'))
+          branch = text.index('    if(is32bit) {', section)
+          gate = text.index('        if (!isJitEnabled) {', branch)
+          marker = '        NSString *selected32BitLayerExecPath = nil;'
+          marker_at = text.index(marker, gate)
+          replacement = '''        // Start the integrated ARMv7 runtime directly. LiveExec32 owns
+          // backend/executable-memory diagnostics instead of the host refusing launch.
+          if(!isJitEnabled) {
+              NSLog(@"[LCBootstrap] Starting LiveExec32 without the legacy host JIT gate.");
+          }
+
+'''
+          text = text[:gate] + replacement + text[marker_at:]
+          bootstrap.write_text(text)
 
           workflow = Path('.github/workflows/unsigned-ipa.yml')
           text = workflow.read_text()
-          old_checkout = '''      - name: Checkout LiveExec32
+          checkout = '''      - name: Checkout LiveExec32
                   uses: actions/checkout@v6
                   with:
                     repository: LiveContainer/LiveExec32
                     path: build/LiveExec32
           '''
-          new_checkout = '''      - name: Checkout LiveExec32
+          if checkout not in text:
+              checkout = '''      - name: Checkout LiveExec32
                   uses: actions/checkout@v6
                   with:
                     repository: LiveContainer/LiveExec32
                     ref: 467edd814ba4a52f5785e6c10518b73be26b2259
                     path: build/LiveExec32
-
-                - name: Patch bundled LiveExec32 integration
-                  run: python3 scripts/patch_liveexec32.py build/LiveExec32
           '''
-          if old_checkout not in text:
-              raise SystemExit('Expected LiveExec32 checkout block was not found')
-          workflow.write_text(text.replace(old_checkout, new_checkout, 1))
+          # Normalize from actual YAML indentation instead of relying on the embedded indentation above.
+          actual = "      - name: Checkout LiveExec32\n        uses: actions/checkout@v6\n        with:\n          repository: LiveContainer/LiveExec32\n          path: build/LiveExec32\n"
+          already_pinned = "      - name: Checkout LiveExec32\n        uses: actions/checkout@v6\n        with:\n          repository: LiveContainer/LiveExec32\n          ref: 467edd814ba4a52f5785e6c10518b73be26b2259\n          path: build/LiveExec32\n"
+          patched = already_pinned + "\n      - name: Patch bundled LiveExec32 integration\n        run: python3 scripts/patch_liveexec32.py build/LiveExec32\n"
+          if actual in text:
+              text = text.replace(actual, patched, 1)
+          elif already_pinned in text and 'Patch bundled LiveExec32 integration' not in text:
+              text = text.replace(already_pinned, patched, 1)
+          elif 'Patch bundled LiveExec32 integration' not in text:
+              raise SystemExit('LiveExec32 checkout block was not found')
+          workflow.write_text(text)
 
           source_updater = Path('.github/update_unsigned_source.py')
           text = source_updater.read_text()
           text = text.replace(
               '        "Requires a configured JIT provider such as StikDebug for 32-bit launches.",',
-              '        "Starts the integrated LiveExec32 runtime directly; runtime backend errors are reported by LiveExec32 instead of a host JIT gate.",',
+              '        "Starts the integrated LiveExec32 runtime directly; backend errors are reported by LiveExec32 instead of a host JIT gate.",',
           )
           text = text.replace(
               '"description": "AltStore and SideStore source for unsigned real-device LiveContainer builds with bundled LiveExec32. 32-bit IPA support is experimental and still requires JIT.",',
