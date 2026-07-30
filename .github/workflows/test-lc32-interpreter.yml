@@ -40,3 +40,12 @@ jobs:
             -o lc32-macho-loader-tests
       - name: Run ARMv7 Mach-O loader tests
         run: ./lc32-macho-loader-tests
+      - name: Build Darwin syscall tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32DarwinSyscalls.cpp \
+            runtime/tests/LC32DarwinSyscallsTests.cpp \
+            -o lc32-darwin-syscall-tests
+      - name: Run Darwin syscall tests
+        run: ./lc32-darwin-syscall-tests
