@@ -1,11 +1,34 @@
 #include "LC32BootSession.hpp"
+#include "LC32MachOVirtualBindings.hpp"
 #include "LC32RegionOperations.hpp"
+#include "LC32VirtualRuntime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <sstream>
 
 namespace lc32 {
+namespace {
+
+VirtualRuntimeSymbol resolveVirtualRuntimeAddress(uint32_t address) {
+    const auto& specs = virtualRuntimeSymbolSpecs();
+    for (std::size_t index = 0; index < specs.size(); ++index) {
+        const uint32_t candidate = static_cast<uint32_t>(0xF1000000u + index * 4u);
+        if (candidate != address) continue;
+        const auto& spec = specs[index];
+        return {
+            spec.imageKind,
+            spec.bindingKind,
+            spec.name,
+            candidate,
+            spec.executable,
+        };
+    }
+    return {};
+}
+
+} // namespace
 
 BootSession::BootSession() = default;
 
@@ -31,8 +54,8 @@ bool BootSession::unmap(uint32_t address, uint32_t size) {
 }
 
 bool BootSession::protect(uint32_t address,
-                     uint32_t size,
-                     uint32_t protection) {
+                          uint32_t size,
+                          uint32_t protection) {
     return protectRegionRange(regions_, address, size, protection);
 }
 
@@ -131,6 +154,38 @@ BootResult BootSession::boot(const uint8_t* image,
         return out;
     }
 
+    MachOVirtualBindingResult virtualBindings = collectArmv7VirtualBindings(image, size);
+    if (!virtualBindings.ok) {
+        event(out, "virtual-binding-parse-failed", virtualBindings.error);
+        out.cpuResult = {StopReason::Halt, 0, 0, 0, virtualBindings.error};
+        return out;
+    }
+    uint32_t patchedBindingCount = 0;
+    for (const MachOVirtualBinding& binding : virtualBindings.bindings) {
+        const uint32_t target = binding.target.guestAddress;
+        if (!write(binding.slotAddress, &target, sizeof(target))) {
+            std::ostringstream detail;
+            detail << binding.symbol << " at 0x" << std::hex << binding.slotAddress;
+            event(out, "virtual-binding-write-failed", detail.str());
+            out.cpuResult = {
+                StopReason::MemoryFault, binding.slotAddress, 0, 0, detail.str()};
+            return out;
+        }
+        ++patchedBindingCount;
+    }
+    event(out,
+          "virtual-bindings-patched",
+          virtualBindings.unsupportedSymbols.empty()
+              ? "all discovered pointer imports supported"
+              : "unsupported pointer imports remain",
+          patchedBindingCount);
+    if (!virtualBindings.unsupportedSymbols.empty()) {
+        event(out,
+              "virtual-binding-unresolved",
+              virtualBindings.unsupportedSymbols.front(),
+              static_cast<uint32_t>(virtualBindings.unsupportedSymbols.size()));
+    }
+
     out.loaded = true;
     state_.r[15] = out.image.entryPoint & ~1u;
     state_.setThumb(out.image.thumb || (out.image.entryPoint & 1u));
@@ -156,6 +211,7 @@ BootResult BootSession::boot(const uint8_t* image,
         [this](uint32_t address, const void* data, size_t bytes) {
             return write(address, data, bytes);
         }};
+    VirtualRuntimeMemory virtualMemory{memory.read, memory.write};
     SyscallMemory syscallMemory{
         memory.read,
         memory.write,
@@ -172,6 +228,35 @@ BootResult BootSession::boot(const uint8_t* image,
     DarwinSyscalls syscalls(syscallMemory);
 
     for (uint64_t i = 0; i < maxSteps; ++i) {
+        const VirtualRuntimeSymbol virtualSymbol = resolveVirtualRuntimeAddress(state_.r[15]);
+        if (virtualSymbol.imageKind != VirtualRuntimeImageKind::Unsupported) {
+            const std::array<uint32_t, 4> args = {
+                state_.r[0], state_.r[1], state_.r[2], state_.r[3]};
+            VirtualRuntimeCallResult call =
+                dispatchVirtualRuntimeSymbol(virtualSymbol, args, virtualMemory);
+            if (!call.handled || !call.ok) {
+                const std::string detail = virtualSymbol.canonicalName + ": " +
+                    (call.error.empty() ? "virtual runtime call is not implemented" : call.error);
+                out.cpuResult = {
+                    StopReason::Halt, state_.r[15], 0, i, detail};
+                event(out, "virtual-runtime-call-failed", detail);
+                return out;
+            }
+            const uint32_t returnAddress = state_.r[14];
+            if (returnAddress == 0) {
+                const std::string detail = virtualSymbol.canonicalName + ": link register is zero";
+                out.cpuResult = {
+                    StopReason::Halt, state_.r[15], 0, i, detail};
+                event(out, "virtual-runtime-return-failed", detail);
+                return out;
+            }
+            state_.r[0] = call.returnValue;
+            state_.setThumb((returnAddress & 1u) != 0);
+            state_.r[15] = returnAddress & ~1u;
+            event(out, "virtual-runtime-call", virtualSymbol.canonicalName, call.returnValue);
+            continue;
+        }
+
         Result step = interpreter.step();
         if (step.reason == StopReason::None) continue;
         if (step.reason == StopReason::UnsupportedInstruction &&
