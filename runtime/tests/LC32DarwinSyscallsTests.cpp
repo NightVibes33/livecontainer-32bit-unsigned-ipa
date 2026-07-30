@@ -17,6 +17,10 @@ int main() {
     constexpr uint32_t kFcntlGetFd = 1u;
     constexpr uint32_t kFcntlSetFd = 2u;
     constexpr uint32_t kFcntlGetFl = 3u;
+    constexpr uint32_t kGuestStat64Size = 108u;
+    constexpr uint32_t kGuestStat64ModeOffset = 4u;
+    constexpr uint32_t kGuestStat64LinkCountOffset = 6u;
+    constexpr uint32_t kGuestStat64SizeOffset = 60u;
 
     std::vector<unsigned char> memory(4096);
     SyscallMemory sm;
@@ -134,6 +138,47 @@ int main() {
     auto getFl = rooted.dispatch(state, 0x80u, false);
     assert(getFl.handled && getFl.errorNumber == 0);
     assert(state.r[0] == kGuestOpenCloseExec);
+
+    constexpr uint32_t statAddress = 2048u;
+    std::memset(memory.data() + statAddress, 0xa5, kGuestStat64Size + 1u);
+    state = {};
+    state.r[12] = 339;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = statAddress;
+    auto fstat64 = rooted.dispatch(state, 0x80u, false);
+    assert(fstat64.handled && fstat64.errorNumber == 0);
+    assert(state.r[0] == 0u);
+    assert(memory[statAddress + kGuestStat64Size] == 0xa5u);
+
+    uint16_t guestMode = 0;
+    uint16_t guestLinkCount = 0;
+    int64_t guestSize = -1;
+    std::memcpy(&guestMode,
+                memory.data() + statAddress + kGuestStat64ModeOffset,
+                sizeof(guestMode));
+    std::memcpy(&guestLinkCount,
+                memory.data() + statAddress + kGuestStat64LinkCountOffset,
+                sizeof(guestLinkCount));
+    std::memcpy(&guestSize,
+                memory.data() + statAddress + kGuestStat64SizeOffset,
+                sizeof(guestSize));
+    assert((guestMode & 0170000u) == 0100000u);
+    assert(guestLinkCount >= 1u);
+    assert(guestSize == static_cast<int64_t>(payload.size()));
+
+    state = {};
+    state.r[12] = 339;
+    state.r[0] = 9999u;
+    state.r[1] = statAddress;
+    auto fstatBadFd = rooted.dispatch(state, 0x80u, false);
+    assert(fstatBadFd.handled && fstatBadFd.errorNumber == EBADF);
+
+    state = {};
+    state.r[12] = 339;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = static_cast<uint32_t>(memory.size() - 8u);
+    auto fstatBadPointer = rooted.dispatch(state, 0x80u, false);
+    assert(fstatBadPointer.handled && fstatBadPointer.errorNumber == EFAULT);
 
     state = {};
     state.r[12] = 92;
