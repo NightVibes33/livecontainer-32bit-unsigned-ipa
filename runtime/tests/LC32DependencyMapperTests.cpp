@@ -70,8 +70,8 @@ int main() {
     assert(mapped.ok);
     assert(mapped.images.size() == 2);
     assert(mapped.images[0].load.ok);
-    assert(mapped.images[0].load.segments[0].address == 0x30001000u);
-    assert(mapped.images[1].load.segments[0].address == 0x31001000u);
+    assert(mapped.images[0].load.segments[0].vmaddr == 0x30001000u);
+    assert(mapped.images[1].load.segments[0].vmaddr == 0x31001000u);
     assert(regions.count(0x30001000u) == 1);
     assert(regions.count(0x31001000u) == 1);
 
