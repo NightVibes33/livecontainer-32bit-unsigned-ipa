@@ -1,8 +1,13 @@
 #include "../LC32DarwinSyscalls.hpp"
 
 #include <cassert>
+#include <cerrno>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace lc32;
@@ -59,6 +64,80 @@ int main() {
     assert(!unknown.handled);
     assert(unknown.number == 9999u);
 
+    char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
+    char* rootDirectory = ::mkdtemp(rootTemplate);
+    assert(rootDirectory != nullptr);
+    const std::filesystem::path root(rootDirectory);
+    std::filesystem::create_directories(root / "usr/lib");
+    const std::string payload = "legacy-dylib-bytes";
+    {
+        std::ofstream file(root / "usr/lib/libA.dylib", std::ios::binary);
+        file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    }
+    assert(::symlink("/etc/passwd", (root / "usr/lib/escape").c_str()) == 0);
+
+    DarwinSyscalls rooted(sm, root.string());
+    const auto putCString = [&](uint32_t address, const std::string& text) {
+        assert(address + text.size() + 1u <= memory.size());
+        std::memcpy(memory.data() + address, text.c_str(), text.size() + 1u);
+    };
+
+    putCString(512, "/usr/lib/libA.dylib");
+    state = {};
+    state.r[12] = 5;
+    state.r[0] = 512;
+    state.r[1] = 0;
+    auto opened = rooted.dispatch(state, 0x80u, false);
+    assert(opened.handled && opened.errorNumber == 0);
+    const int guestFd = static_cast<int>(state.r[0]);
+    assert(guestFd >= 3);
+
+    state = {};
+    state.r[12] = 3;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = 1024;
+    state.r[2] = static_cast<uint32_t>(payload.size());
+    auto read = rooted.dispatch(state, 0x80u, false);
+    assert(read.handled && read.errorNumber == 0);
+    assert(state.r[0] == payload.size());
+    assert(std::memcmp(memory.data() + 1024, payload.data(), payload.size()) == 0);
+
+    state = {};
+    state.r[12] = 6;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    auto closed = rooted.dispatch(state, 0x80u, false);
+    assert(closed.handled && closed.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 3;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = 1024;
+    state.r[2] = 1;
+    auto readClosed = rooted.dispatch(state, 0x80u, false);
+    assert(readClosed.handled && readClosed.errorNumber == EBADF);
+
+    state = {};
+    state.r[12] = 5;
+    state.r[0] = 512;
+    state.r[1] = 1;
+    auto writeOpen = rooted.dispatch(state, 0x80u, false);
+    assert(writeOpen.handled && writeOpen.errorNumber == EROFS);
+
+    putCString(512, "/../../etc/passwd");
+    state = {};
+    state.r[12] = 5;
+    state.r[0] = 512;
+    auto traversal = rooted.dispatch(state, 0x80u, false);
+    assert(traversal.handled && traversal.errorNumber == EACCES);
+
+    putCString(512, "/usr/lib/escape");
+    state = {};
+    state.r[12] = 5;
+    state.r[0] = 512;
+    auto symlinkEscape = rooted.dispatch(state, 0x80u, false);
+    assert(symlinkEscape.handled && symlinkEscape.errorNumber == EACCES);
+
+    std::filesystem::remove_all(root);
     std::cout << "LC32 Darwin syscall tests passed\n";
     return 0;
 }
