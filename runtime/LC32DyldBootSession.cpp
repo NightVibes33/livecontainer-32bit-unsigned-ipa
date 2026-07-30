@@ -83,7 +83,9 @@ bool DyldBootSession::dispatchSupervisorCall(DyldBootResult& out, const Result& 
     return true;
 }
 
-DyldBootResult DyldBootSession::executePrepared(DyldBootResult out, uint64_t maxSteps) {
+DyldBootResult DyldBootSession::executePrepared(DyldBootResult out,
+                                                 uint64_t maxSteps,
+                                                 std::string syscallGuestRoot) {
     out.prepared = true;
     state_.r[15] = out.handoff.pc;
     state_.r[13] = out.handoff.sp;
@@ -94,7 +96,7 @@ DyldBootResult DyldBootSession::executePrepared(DyldBootResult out, uint64_t max
     Memory memory{
         [this](uint32_t address, void* data, size_t size) { return read(address, data, size); },
         [this](uint32_t address, const void* data, size_t size) { return write(address, data, size); }};
-    DarwinSyscalls syscalls({memory.read, memory.write});
+    DarwinSyscalls syscalls({memory.read, memory.write}, std::move(syscallGuestRoot));
     Interpreter interpreter(state_, memory);
 
     for (uint64_t i = 0; i < maxSteps; ++i) {
@@ -157,7 +159,7 @@ DyldBootResult DyldBootSession::bootImageSet(const DyldImageSetSpec& spec,
           "dyld-image-set-ready",
           "mapped " + std::to_string(out.imageSet.mappedDependencies.images.size()) + " dependency images",
           static_cast<uint32_t>(out.imageSet.mappedDependencies.images.size()));
-    return executePrepared(std::move(out), maxSteps);
+    return executePrepared(std::move(out), maxSteps, spec.pathContext.guestRoot);
 }
 
 DyldBootResult DyldBootSession::bootImpl(const DyldHandoffSpec& spec,
