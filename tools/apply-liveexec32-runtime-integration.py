@@ -9,18 +9,24 @@ le = repo / 'build/LiveExec32/main.cpp'
 lc_text = lc.read_text()
 needle = '''        NSLog(@"[LCBootstrap] Using 32-bit translation layer at %@", selected32BitLayerPath);\n        appExecPath = strdup(selected32BitLayerExecPath.UTF8String);\n'''
 replacement = '''        NSLog(@"[LCBootstrap] Using 32-bit translation layer at %@", selected32BitLayerPath);\n\n        // Pass the original ARMv7 application contract to LiveExec32. The 64-bit\n        // launch path remains untouched because these variables are set only here.\n        NSString *runtimeRoot = [docPath stringByAppendingPathComponent:@"LiveExec32Runtime/rootfs"];\n        NSString *runtimeLogs = [docPath stringByAppendingPathComponent:@"LiveExec32Runtime/Logs"];\n        [fm createDirectoryAtPath:runtimeLogs withIntermediateDirectories:YES attributes:nil error:nil];\n        NSString *runtimeLog = [runtimeLogs stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-boot.jsonl", appBundle.bundleIdentifier ?: @"unknown"]];\n        setenv("LC32_GUEST_EXECUTABLE", appBundle.executablePath.fileSystemRepresentation, 1);\n        setenv("LC32_GUEST_BUNDLE", appBundle.bundlePath.fileSystemRepresentation, 1);\n        setenv("LC32_GUEST_HOME", newHomePath.fileSystemRepresentation, 1);\n        setenv("LC32_GUEST_ROOTFS", runtimeRoot.fileSystemRepresentation, 1);\n        setenv("LC32_GUEST_DYLD", [[runtimeRoot stringByAppendingPathComponent:@"usr/lib/dyld"] fileSystemRepresentation], 1);\n        setenv("LC32_LOG_PATH", runtimeLog.fileSystemRepresentation, 1);\n        setenv("LC32_GUEST_BUNDLE_ID", (appBundle.bundleIdentifier ?: @"unknown").UTF8String, 1);\n        setenv("LC32_LAUNCH_SCHEMA", "1", 1);\n        appExecPath = strdup(selected32BitLayerExecPath.UTF8String);\n'''
-if needle not in lc_text:
-    raise SystemExit('LCBootstrap integration anchor not found')
-lc.write_text(lc_text.replace(needle, replacement, 1))
+if needle in lc_text:
+    lc.write_text(lc_text.replace(needle, replacement, 1))
+elif 'setenv("LC32_GUEST_EXECUTABLE"' not in lc_text:
+    raise SystemExit('LCBootstrap integration anchor not found and launch contract is absent')
+else:
+    print('LCBootstrap launch integration already present')
 
 le_text = le.read_text()
 le_text = le_text.replace('#define DEFAULT_ROOT_PATH "/private/var/mobile/Documents/TrollExperiments/CProjects/dynarmic/iOS10RAMDisk"\n#define DEFAULT_DYLD_PATH DEFAULT_ROOT_PATH "/usr/lib/dyld"',
 '''#define DEFAULT_ROOT_PATH "/private/var/mobile/Documents/TrollExperiments/CProjects/dynarmic/iOS10RAMDisk"\n#define DEFAULT_DYLD_PATH DEFAULT_ROOT_PATH "/usr/lib/dyld"\n\nstatic FILE *lc32_log_file = nullptr;\nstatic void lc32_log(const char *stage, const char *detail) {\n  if (!lc32_log_file) {\n    const char *path = getenv("LC32_LOG_PATH");\n    if (path && *path) lc32_log_file = fopen(path, "a");\n  }\n  fprintf(stderr, "[LiveExec32] %s: %s\\n", stage, detail ? detail : "");\n  if (lc32_log_file) {\n    fprintf(lc32_log_file, "{\\\"stage\\\":\\\"%s\\\",\\\"detail\\\":\\\"%s\\\"}\\n", stage, detail ? detail : "");\n    fflush(lc32_log_file);\n  }\n}\n\nstatic const char *lc32_required_env(const char *name) {\n  const char *value = getenv(name);\n  if (!value || !*value) {\n    lc32_log("configuration-error", name);\n    return nullptr;\n  }\n  return value;\n}''')
 old = '''int main(int argc, char* argv[], char* envp[]) {\n  const char *execPath;\n  if (getppid() == 1) {\n    // test app\n    execPath = "/var/mobile/Documents/TrollExperiments/CProjects/dynarmic/ipas/FS3 Mobile.app/FS3 Mobile";\n//"/var/mobile/Documents/TrollExperiments/CProjects/dynarmic/LiveExec32/test/a.out";\n  } else if (argc == 1) {\n    printf("Usage: %s <path> argv...\\n", argv[0]);\n    return 1;\n  } else {\n    execPath = argv[1];\n  }\n\n  Dynarmic_nativeInitialize();\n'''
 new = '''int main(int argc, char* argv[], char* envp[]) {\n  const char *execPath = getenv("LC32_GUEST_EXECUTABLE");\n  if (!execPath || !*execPath) {\n    if (argc > 1) execPath = argv[1];\n  }\n  if (!execPath || !*execPath) {\n    lc32_log("configuration-error", "LC32_GUEST_EXECUTABLE");\n    return 64;\n  }\n  lc32_log("launch-contract", execPath);\n  if (access(execPath, R_OK) != 0) {\n    lc32_log("guest-executable-unreadable", strerror(errno));\n    return 66;\n  }\n\n  Dynarmic_nativeInitialize();\n  lc32_log("dynarmic-initialized", execPath);\n'''
-if old not in le_text:
-    raise SystemExit('LiveExec32 main anchor not found')
-le_text = le_text.replace(old, new, 1)
+if old in le_text:
+    le_text = le_text.replace(old, new, 1)
+elif 'LC32_GUEST_EXECUTABLE' not in le_text:
+    raise SystemExit('LiveExec32 main anchor not found and launch contract is absent')
+else:
+    print('LiveExec32 launch integration already present')
 le_text = le_text.replace('''  setenv("DYLD_PATH", DEFAULT_DYLD_PATH, 0);\n  const char *dyldPath = getenv("DYLD_PATH");\n  printf("Loading dyld at DYLD_PATH %s\\n", dyldPath);\n  Dynarmic_map_file(true, 0x10000000, dyldPath);\n''', '''  const char *dyldPath = getenv("LC32_GUEST_DYLD");\n  if (!dyldPath || !*dyldPath) dyldPath = DEFAULT_DYLD_PATH;\n  if (access(dyldPath, R_OK) != 0) {\n    lc32_log("guest-dyld-unreadable", dyldPath);\n    return 66;\n  }\n  setenv("DYLD_PATH", dyldPath, 1);\n  lc32_log("guest-dyld-mapping", dyldPath);\n  Dynarmic_map_file(true, 0x10000000, dyldPath);\n  lc32_log("guest-dyld-mapped", dyldPath);\n''', 1)
 le_text = le_text.replace('''  setenv("ROOT_PATH", DEFAULT_ROOT_PATH, 0);\n  const char *rootPath = getenv("ROOT_PATH");\n''', '''  const char *rootPath = getenv("LC32_GUEST_ROOTFS");\n  if (!rootPath || !*rootPath) rootPath = DEFAULT_ROOT_PATH;\n  setenv("ROOT_PATH", rootPath, 1);\n  lc32_log("guest-rootfs", rootPath);\n''', 1)
 le_text = le_text.replace('''  u32 execAddr = Dynarmic_map_file(false, 0x11000000, execPath);\n''', '''  lc32_log("guest-executable-mapping", execPath);\n  u32 execAddr = Dynarmic_map_file(false, 0x11000000, execPath);\n  lc32_log("guest-executable-mapped", execPath);\n''', 1)
