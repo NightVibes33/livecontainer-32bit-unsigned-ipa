@@ -1618,6 +1618,76 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         return true;
     };
 
+    const auto queueServiceMigReply = [&](uint32_t destination,
+                                                   const std::vector<uint8_t>& request,
+                                                   uint32_t replyName) -> bool {
+        if (destination != kSystemLoggerPort &&
+            destination != kNotificationCenterPort &&
+            destination != kCfprefsdPort) {
+            return false;
+        }
+        if (request.size() < kMachHeaderSize) return true;
+
+        uint32_t requestId = 0;
+        std::memcpy(&requestId, request.data() + 20u, sizeof(requestId));
+
+        const auto queueInlineReply = [&](int32_t returnCode,
+                                          const std::vector<uint32_t>& words) {
+            if (replyName == 0) return;
+            auto replyPort = machPorts_.find(replyName);
+            if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0) {
+                return;
+            }
+
+            constexpr uint8_t kNdr[8] = {0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u};
+            std::vector<uint8_t> reply(36u + words.size() * sizeof(uint32_t), 0u);
+            const uint32_t size = static_cast<uint32_t>(reply.size());
+            const uint32_t local = replyName;
+            const uint32_t replyId = requestId + 100u;
+            std::memcpy(reply.data() + 4u, &size, 4u);
+            std::memcpy(reply.data() + 12u, &local, 4u);
+            std::memcpy(reply.data() + 20u, &replyId, 4u);
+            std::memcpy(reply.data() + 24u, kNdr, sizeof(kNdr));
+            std::memcpy(reply.data() + 32u, &returnCode, 4u);
+            if (!words.empty()) {
+                std::memcpy(reply.data() + 36u,
+                            words.data(),
+                            words.size() * sizeof(uint32_t));
+            }
+            replyPort->second.messages.push_back(std::move(reply));
+        };
+
+        constexpr int32_t kMigBadId = -303;
+        if (destination != kNotificationCenterPort) {
+            queueInlineReply(kMigBadId, {});
+            return true;
+        }
+
+        switch (requestId) {
+            case 1002u: // _notify_server_check
+                if (request.size() >= 36u) {
+                    queueInlineReply(0, {0u, 0u}); // check=false, status=OK
+                } else {
+                    queueInlineReply(kMigBadId, {});
+                }
+                return true;
+            case 1004u: // _notify_server_suspend
+            case 1005u: // _notify_server_resume
+                if (request.size() >= 36u) {
+                    queueInlineReply(0, {0u}); // status=OK
+                } else {
+                    queueInlineReply(kMigBadId, {});
+                }
+                return true;
+            case 1023u: // _notify_server_checkin
+                queueInlineReply(0, {3u, 42u, 0u}); // version, server PID, status
+                return true;
+            default:
+                queueInlineReply(kMigBadId, {});
+                return true;
+        }
+    };
+
     switch (number) {
         case 16: {
             if (!validTask(state.r[0])) {
@@ -1806,8 +1876,10 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 const bool handledBootstrapLookup =
                     destination == kBootstrapPort &&
                     queueBootstrapLookupReply(message, replyName);
+                const bool handledServiceMig =
+                    queueServiceMigReply(destination, message, replyName);
                 if (!handledHostMig && !handledTaskSpecialPort &&
-                    !handledBootstrapLookup) {
+                    !handledBootstrapLookup && !handledServiceMig) {
                     port->second.messages.push_back(std::move(message));
                 }
                 if (consumeSend) {

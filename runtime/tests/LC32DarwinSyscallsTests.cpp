@@ -498,6 +498,99 @@ int main() {
     assert(missingSize == 36u && missingReplyId == 504u);
     assert(missingReturn == 1102u);
 
+
+    const auto sendServiceRequest = [&](uint32_t destination,
+                                        uint32_t requestId,
+                                        const std::vector<uint32_t>& body,
+                                        bool expectsReply) {
+        const uint32_t requestSize =
+            static_cast<uint32_t>(24u + body.size() * sizeof(uint32_t));
+        uint32_t header[6] = {
+            19u, requestSize, destination, expectsReply ? replyName : 0u, 0u, requestId};
+        std::memcpy(lowMemory.data() + kMachMessageAddress, header, sizeof(header));
+        if (!body.empty()) {
+            std::memcpy(lowMemory.data() + kMachMessageAddress + sizeof(header),
+                        body.data(),
+                        body.size() * sizeof(uint32_t));
+        }
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachSendMsg;
+        state.r[2] = requestSize;
+        const auto sent = syscalls.dispatch(state, 0, false);
+        assert(sent.handled && state.r[0] == 0u);
+    };
+    const auto receiveServiceReply = [&](uint32_t capacity) {
+        std::memset(lowMemory.data() + kMachMessageAddress, 0, capacity);
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachReceiveMsg;
+        state.r[3] = capacity;
+        state.r[4] = replyName;
+        return syscalls.dispatch(state, 0, false);
+    };
+
+    // notify_ipc subsystem 1000: _notify_server_check is request 1002.
+    sendServiceRequest(0x111u, 1002u, {0u, 0u, 7u}, true);
+    const auto notifyCheckReply = receiveServiceReply(64u);
+    assert(notifyCheckReply.handled && state.r[0] == 0u);
+    uint32_t serviceReplySize = 0;
+    uint32_t serviceReplyId = 0;
+    int32_t serviceReturnCode = 1;
+    uint32_t notifyCheckValue = 1;
+    uint32_t notifyStatus = 1;
+    std::memcpy(&serviceReplySize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&serviceReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&serviceReturnCode, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    std::memcpy(&notifyCheckValue, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&notifyStatus, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    assert(serviceReplySize == 44u && serviceReplyId == 1102u);
+    assert(serviceReturnCode == 0 && notifyCheckValue == 0u && notifyStatus == 0u);
+
+    // notify check-in returns deterministic IPC version 3 and a stable virtual PID.
+    sendServiceRequest(0x111u, 1023u, {}, true);
+    const auto notifyCheckinReply = receiveServiceReply(64u);
+    assert(notifyCheckinReply.handled && state.r[0] == 0u);
+    uint32_t notifyVersion = 0;
+    uint32_t notifyServerPid = 0;
+    std::memcpy(&serviceReplySize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&serviceReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&serviceReturnCode, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    std::memcpy(&notifyVersion, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&notifyServerPid, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    std::memcpy(&notifyStatus, lowMemory.data() + kMachMessageAddress + 44u, 4u);
+    assert(serviceReplySize == 48u && serviceReplyId == 1123u);
+    assert(serviceReturnCode == 0 && notifyVersion == 3u);
+    assert(notifyServerPid == 42u && notifyStatus == 0u);
+
+    // Unknown notify and cfprefsd calls fail immediately with MIG_BAD_ID (-303).
+    sendServiceRequest(0x111u, 1999u, {}, true);
+    const auto notifyUnknownReply = receiveServiceReply(64u);
+    assert(notifyUnknownReply.handled && state.r[0] == 0u);
+    std::memcpy(&serviceReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&serviceReturnCode, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    assert(serviceReplyId == 2099u && serviceReturnCode == -303);
+
+    sendServiceRequest(0x112u, 6000u, {}, true);
+    const auto prefsUnknownReply = receiveServiceReply(64u);
+    assert(prefsUnknownReply.handled && state.r[0] == 0u);
+    std::memcpy(&serviceReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&serviceReturnCode, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    assert(serviceReplyId == 6100u && serviceReturnCode == -303);
+
+    // One-way logger messages are consumed rather than accumulating forever.
+    sendServiceRequest(0x110u, 5000u, {}, false);
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 64u;
+    state.r[4] = 0x110u;
+    const auto loggerQueueEmpty = syscalls.dispatch(state, 0, false);
+    assert(loggerQueueEmpty.handled && state.r[0] == 0x10004003u);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
