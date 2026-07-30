@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'tools/apply_readlink_lstat.py'
+      - 'tools/fix_apply_readlink_lstat.py'
 
 permissions:
   contents: read
@@ -19,6 +20,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+      - name: Normalize staged patch matcher
+        run: python3 tools/fix_apply_readlink_lstat.py
       - name: Apply readlink and lstat runtime patch
         run: python3 tools/apply_readlink_lstat.py
       - name: Commit runtime and tests
