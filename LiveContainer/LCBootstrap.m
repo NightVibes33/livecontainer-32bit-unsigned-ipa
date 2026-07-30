@@ -102,21 +102,25 @@ static NSString *LCResolve32BitLayerPath(NSString *docPath, NSString *selected32
     return bundled32BitLayerPath;
 }
 
-static bool LCExecutableRequires32BitLayer(const char *execPath) {
-    if(!execPath) {
+static bool LCDetectExecutableRequires32BitLayer(const char *execPath, bool *requires32BitLayer) {
+    if(!execPath || !requires32BitLayer) {
         return false;
     }
+    __block bool foundMachOSlice = false;
     __block bool has64bitSlice = false;
     NSString *error = LCParseMachO(execPath, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+        foundMachOSlice = true;
         if(header->cputype == CPU_TYPE_ARM64) {
             has64bitSlice = true;
         }
     });
-    if(error) {
-        NSLog(@"[LCBootstrap] Failed to inspect executable architecture for %s: %@", execPath, error);
+    if(error || !foundMachOSlice) {
+        NSLog(@"[LCBootstrap] Failed to inspect executable architecture for %s: %@", execPath, error ?: @"no Mach-O slices found");
         return false;
     }
-    return !has64bitSlice;
+    // A universal binary with an ARM64 slice must use LiveContainer's normal path.
+    *requires32BitLayer = !has64bitSlice;
+    return true;
 }
 #endif
 
@@ -669,10 +673,24 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     
 #if is32BitSupported
-    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
-    if(!is32bit && LCExecutableRequires32BitLayer(appExecPath)) {
-        NSLog(@"[LCBootstrap] Runtime detected 32-bit guest executable; using LiveExec32 despite stale LCAppInfo.plist.");
-        is32bit = true;
+    bool metadataSays32Bit = [guestAppInfo[@"is32bit"] boolValue];
+    bool is32bit = metadataSays32Bit;
+    bool detectedRequires32BitLayer = false;
+    if(LCDetectExecutableRequires32BitLayer(appExecPath, &detectedRequires32BitLayer)) {
+        is32bit = detectedRequires32BitLayer;
+        if(metadataSays32Bit != is32bit) {
+            NSLog(@"[LCBootstrap] Correcting stale is32bit metadata (%d -> %d) for %s.", metadataSays32Bit, is32bit, appExecPath);
+            NSMutableDictionary *repairedAppInfo = [guestAppInfo mutableCopy];
+            repairedAppInfo[@"is32bit"] = @(is32bit);
+            NSString *appInfoPath = [bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"];
+            if([repairedAppInfo writeBinToFile:appInfoPath atomically:YES]) {
+                guestAppInfo = repairedAppInfo;
+            } else {
+                NSLog(@"[LCBootstrap] Failed to persist repaired architecture metadata at %@.", appInfoPath);
+            }
+        }
+    } else {
+        NSLog(@"[LCBootstrap] Architecture inspection failed; retaining cached is32bit=%d.", metadataSays32Bit);
     }
     if(is32bit) {
         if (!isJitEnabled) {
