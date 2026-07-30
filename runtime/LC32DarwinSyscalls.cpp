@@ -59,14 +59,17 @@ TrapResult DarwinSyscalls::dispatch(CPUState& state, uint32_t svcImmediate, bool
     const uint32_t rawNumber = state.r[12];
     TrapResult result;
 
-    // Darwin Mach traps are encoded as small negative numbers in r12. Test this
-    // range before the BSD high-bit marker because every negative value also has
-    // bit 31 set and would otherwise be misclassified as a Unix syscall.
+    // Negative ARM Mach trap numbers occupy 0xffffffe0..0xffffffff and must
+    // be classified before the generic high-bit BSD form.
     if (rawNumber >= kMachTrapBase) {
         result = dispatchMach(state, static_cast<uint32_t>(-static_cast<int32_t>(rawNumber)));
         result.trapClass = TrapClass::Mach;
     } else if ((rawNumber & kUnixTrapBase) != 0) {
         result = dispatchUnix(state, rawNumber & ~kUnixTrapBase);
+        result.trapClass = TrapClass::Unix;
+    } else if (svcImmediate == 0x80u) {
+        // Darwin ARM EABI: svc #0x80 selects a BSD syscall whose number is in r12.
+        result = dispatchUnix(state, rawNumber);
         result.trapClass = TrapClass::Unix;
     } else if (svcImmediate != 0) {
         result = dispatchUnix(state, svcImmediate);
@@ -88,16 +91,11 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             r.shouldStop = true;
             return r;
         }
-        case 20:
-            return ok(number, static_cast<int32_t>(::getpid()), "getpid");
-        case 24:
-            return ok(number, static_cast<int32_t>(::getuid()), "getuid");
-        case 25:
-            return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
-        case 47:
-            return ok(number, static_cast<int32_t>(::getgid()), "getgid");
-        case 43:
-            return ok(number, static_cast<int32_t>(::getegid()), "getegid");
+        case 20: return ok(number, static_cast<int32_t>(::getpid()), "getpid");
+        case 24: return ok(number, static_cast<int32_t>(::getuid()), "getuid");
+        case 25: return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
+        case 47: return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 43: return ok(number, static_cast<int32_t>(::getegid()), "getegid");
         case 116: {
             const uint32_t tvAddress = state.r[0];
             if (!tvAddress) return ok(number, 0, "gettimeofday(null)");
@@ -129,8 +127,7 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             if (!readCString(state.r[0], path)) return fail(number, EFAULT, "open path");
             return fail(number, ENOENT, "open blocked pending guest-root mapper");
         }
-        case 6:
-            return ok(number, 0, "close virtualized");
+        case 6: return ok(number, 0, "close virtualized");
         default: {
             TrapResult r;
             r.number = number;
@@ -142,14 +139,10 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
 
 TrapResult DarwinSyscalls::dispatchMach(CPUState&, uint32_t number) {
     switch (number) {
-        case 26:
-            return ok(number, 0x100, "mach_reply_port placeholder");
-        case 27:
-            return ok(number, 0x101, "thread_self_trap placeholder");
-        case 28:
-            return ok(number, 0x102, "task_self_trap placeholder");
-        case 29:
-            return ok(number, 0x103, "host_self_trap placeholder");
+        case 26: return ok(number, 0x100, "mach_reply_port placeholder");
+        case 27: return ok(number, 0x101, "thread_self_trap placeholder");
+        case 28: return ok(number, 0x102, "task_self_trap placeholder");
+        case 29: return ok(number, 0x103, "host_self_trap placeholder");
         default: {
             TrapResult r;
             r.number = number;
