@@ -1327,6 +1327,7 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
     constexpr uint32_t kThreadPort = 0x101u;
     constexpr uint32_t kTaskPort = 0x102u;
     constexpr uint32_t kHostPort = 0x103u;
+    constexpr uint32_t kBootstrapPort = 0x104u;
 
     constexpr uint32_t kMachPortRightSend = 0u;
     constexpr uint32_t kMachPortRightReceive = 1u;
@@ -1373,6 +1374,7 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         addBuiltin(kThreadPort);
         addBuiltin(kTaskPort);
         addBuiltin(kHostPort);
+        addBuiltin(kBootstrapPort);
     };
     ensureBuiltinPorts();
 
@@ -1498,6 +1500,47 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         std::memcpy(reply.data() + 12u, &local, 4u);
         std::memcpy(reply.data() + 16u, &reserved, 4u);
         std::memcpy(reply.data() + 20u, &replyId, 4u);
+        replyPort->second.messages.push_back(std::move(reply));
+        return true;
+    };
+
+    const auto queueTaskSpecialPortReply = [&](const std::vector<uint8_t>& request,
+                                                    uint32_t replyName) -> bool {
+        if (replyName == 0 || request.size() < 36u) return false;
+        auto replyPort = machPorts_.find(replyName);
+        if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0) {
+            return false;
+        }
+
+        uint32_t requestId = 0;
+        uint32_t whichPort = 0;
+        std::memcpy(&requestId, request.data() + 20u, sizeof(requestId));
+        std::memcpy(&whichPort, request.data() + 32u, sizeof(whichPort));
+        if (requestId != 3409u || whichPort != 4u) return false;
+
+        constexpr uint32_t kDescriptorCount = 1u;
+        constexpr uint32_t kCopySendPortDescriptor =
+            (kMachMsgTypeCopySend << 16u); // disposition byte, type=port descriptor
+        constexpr uint8_t kNdr[8] = {0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u};
+
+        std::vector<uint8_t> reply(52u, 0u);
+        const uint32_t bits = kMachMessageComplex;
+        const uint32_t size = static_cast<uint32_t>(reply.size());
+        const uint32_t remote = 0u;
+        const uint32_t local = replyName;
+        const uint32_t reserved = 0u;
+        const uint32_t replyId = 3509u;
+        std::memcpy(reply.data(), &bits, 4u);
+        std::memcpy(reply.data() + 4u, &size, 4u);
+        std::memcpy(reply.data() + 8u, &remote, 4u);
+        std::memcpy(reply.data() + 12u, &local, 4u);
+        std::memcpy(reply.data() + 16u, &reserved, 4u);
+        std::memcpy(reply.data() + 20u, &replyId, 4u);
+        std::memcpy(reply.data() + 24u, &kDescriptorCount, 4u);
+        std::memcpy(reply.data() + 28u, &kBootstrapPort, 4u);
+        std::memcpy(reply.data() + 36u, &kCopySendPortDescriptor, 4u);
+        std::memcpy(reply.data() + 40u, kNdr, sizeof(kNdr));
+        std::memcpy(reply.data() + 48u, &kKernSuccess, 4u);
         replyPort->second.messages.push_back(std::move(reply));
         return true;
     };
@@ -1684,7 +1727,10 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 std::memcpy(&replyName, message.data() + 12u, sizeof(replyName));
                 const bool handledHostMig =
                     destination == kHostPort && queueHostMigReply(message, replyName);
-                if (!handledHostMig) {
+                const bool handledTaskSpecialPort =
+                    destination == kTaskPort &&
+                    queueTaskSpecialPortReply(message, replyName);
+                if (!handledHostMig && !handledTaskSpecialPort) {
                     port->second.messages.push_back(std::move(message));
                 }
                 if (consumeSend) {

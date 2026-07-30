@@ -377,6 +377,56 @@ int main() {
     assert(hostMemorySize == 1024u * 1024u * 1024u);
     assert(cpuType == 12u && cpuSubtype == 9u);
 
+
+    // task_get_special_port(TASK_BOOTSTRAP_PORT) is MIG request 3409.
+    const uint32_t bootstrapRequestBody[3] = {0u, 0u, 4u};
+    const uint32_t bootstrapRequestSize = 36u;
+    uint32_t bootstrapHeader[6] = {
+        19u, bootstrapRequestSize, 0x102u, replyName, 0u, 3409u};
+    std::memcpy(lowMemory.data() + kMachMessageAddress,
+                bootstrapHeader,
+                sizeof(bootstrapHeader));
+    std::memcpy(lowMemory.data() + kMachMessageAddress + 24u,
+                bootstrapRequestBody,
+                sizeof(bootstrapRequestBody));
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachSendMsg;
+    state.r[2] = bootstrapRequestSize;
+    const auto bootstrapSend = syscalls.dispatch(state, 0, false);
+    assert(bootstrapSend.handled && state.r[0] == 0u);
+
+    std::memset(lowMemory.data() + kMachMessageAddress, 0, 64u);
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 64u;
+    state.r[4] = replyName;
+    const auto bootstrapReceive = syscalls.dispatch(state, 0, false);
+    assert(bootstrapReceive.handled && state.r[0] == 0u);
+    uint32_t bootstrapBits = 0;
+    uint32_t bootstrapReplySize = 0;
+    uint32_t bootstrapReplyId = 0;
+    uint32_t bootstrapDescriptorCount = 0;
+    uint32_t bootstrapPortName = 0;
+    uint32_t bootstrapDescriptorWord = 0;
+    uint32_t bootstrapReturn = 1;
+    std::memcpy(&bootstrapBits, lowMemory.data() + kMachMessageAddress, 4u);
+    std::memcpy(&bootstrapReplySize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&bootstrapReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&bootstrapDescriptorCount, lowMemory.data() + kMachMessageAddress + 24u, 4u);
+    std::memcpy(&bootstrapPortName, lowMemory.data() + kMachMessageAddress + 28u, 4u);
+    std::memcpy(&bootstrapDescriptorWord, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&bootstrapReturn, lowMemory.data() + kMachMessageAddress + 48u, 4u);
+    assert((bootstrapBits & 0x80000000u) != 0u);
+    assert(bootstrapReplySize == 52u && bootstrapReplyId == 3509u);
+    assert(bootstrapDescriptorCount == 1u && bootstrapPortName == 0x104u);
+    assert(((bootstrapDescriptorWord >> 16u) & 0xffu) == 19u);
+    assert((bootstrapDescriptorWord >> 24u) == 0u);
+    assert(bootstrapReturn == 0u);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
