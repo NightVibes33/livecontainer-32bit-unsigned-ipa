@@ -23,9 +23,7 @@ jobs:
           python3 tools/fix-lc32-interpreter-mask.py
           grep -q '0x0ff00000u' runtime/LC32Interpreter.cpp
       - name: Build interpreter tests
-        run: |
-          set -euxo pipefail
-          c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32Interpreter.cpp runtime/tests/LC32InterpreterTests.cpp -o lc32-interpreter-tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32Interpreter.cpp runtime/tests/LC32InterpreterTests.cpp -o lc32-interpreter-tests
       - name: Run interpreter tests
         run: ./lc32-interpreter-tests
       - name: Build ARMv7 Mach-O loader tests
@@ -60,6 +58,10 @@ jobs:
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32GuestPathResolver.cpp runtime/LC32DependencyAudit.cpp runtime/tests/LC32DependencyAuditTests.cpp -o lc32-dependency-audit-tests
       - name: Run dependency audit tests
         run: ./lc32-dependency-audit-tests
+      - name: Build recursive dependency load-plan tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachODependencies.cpp runtime/LC32GuestPathResolver.cpp runtime/LC32DependencyLoadPlan.cpp runtime/tests/LC32DependencyLoadPlanTests.cpp -o lc32-dependency-load-plan-tests
+      - name: Run recursive dependency load-plan tests
+        run: ./lc32-dependency-load-plan-tests
       - name: Build dyld boot execution tests
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror \
