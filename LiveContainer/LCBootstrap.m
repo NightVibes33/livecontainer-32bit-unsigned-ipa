@@ -705,14 +705,6 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         NSString *runtimeLog = [runtimeLogs stringByAppendingPathComponent:
             [NSString stringWithFormat:@"%@-boot.jsonl", appBundle.bundleIdentifier ?: @"unknown"]];
         NSString *runtimeDyld = [runtimeRoot stringByAppendingPathComponent:@"usr/lib/dyld"];
-        if(![fm isReadableFileAtPath:runtimeDyld]) {
-            appError = [NSString stringWithFormat:
-                @"ARMv7 rootfs is missing or incomplete. Expected readable guest dyld at %@. Open Settings → 32-bit Runtime → Import ARMv7 RootFS Folder.",
-                runtimeDyld];
-            NSLog(@"[LCBootstrap] %@", appError);
-            *path = oldPath;
-            return appError;
-        }
         setenv("LC32_GUEST_EXECUTABLE", appBundle.executablePath.fileSystemRepresentation, 1);
         setenv("LC32_GUEST_BUNDLE", appBundle.bundlePath.fileSystemRepresentation, 1);
         setenv("LC32_GUEST_HOME", newHomePath.fileSystemRepresentation, 1);

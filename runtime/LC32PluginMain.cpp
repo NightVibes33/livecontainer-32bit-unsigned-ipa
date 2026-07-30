@@ -1,5 +1,7 @@
 #include "LC32DyldBootSession.hpp"
+#include "LC32MachODependencies.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -127,10 +129,6 @@ int LC32Main(int argc, char** argv) {
     if (!executable || !*executable) {
         return failWith(64, "configuration-error", "LC32_GUEST_EXECUTABLE is missing");
     }
-    if (!dyld || !*dyld) {
-        return failWith(64, "configuration-error", "LC32_GUEST_DYLD is missing");
-    }
-
     logEvent("plugin-start", executable);
 
     std::vector<uint8_t> appImage;
@@ -139,8 +137,28 @@ int LC32Main(int argc, char** argv) {
     if (!readFile(executable, appImage, error)) {
         return failWith(66, "guest-executable-read-failed", std::string(executable) + ": " + error);
     }
-    if (!readFile(dyld, dyldImage, error)) {
-        return failWith(66, "guest-dyld-read-failed", std::string(dyld) + ": " + error);
+    const bool hasGuestDyld = dyld && *dyld && readFile(dyld, dyldImage, error);
+    if (!hasGuestDyld) {
+        logEvent("cleanroom-loader-start", "guest dyld unavailable; inspecting app dependencies");
+        lc32::MachODependencyResult metadata =
+            lc32::parseArmv7MachODependencies(appImage.data(), appImage.size());
+        if (!metadata.ok) {
+            return failWith(70, "cleanroom-loader-parse-failed", metadata.error);
+        }
+        if (metadata.dependencies.empty()) {
+            return failWith(72, "cleanroom-loader-blocked",
+                            "application has no declared dependencies but direct entry startup is not implemented");
+        }
+        for (const auto& dependency : metadata.dependencies) {
+            const std::string& path = dependency.path;
+            logEvent(dependency.weak ? "cleanroom-weak-dependency" : "cleanroom-dependency", path);
+        }
+        const auto required = std::find_if(metadata.dependencies.begin(), metadata.dependencies.end(),
+            [](const lc32::MachODependency& dependency) { return !dependency.weak; });
+        if (required != metadata.dependencies.end()) {
+            return failWith(72, "cleanroom-bridge-required", required->path);
+        }
+        return failWith(72, "cleanroom-loader-blocked", "only weak dependencies were declared");
     }
 
     lc32::DyldHandoffSpec spec;
