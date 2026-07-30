@@ -66,6 +66,21 @@ jobs:
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/LC32DependencyMapper.cpp runtime/tests/LC32DependencyMapperTests.cpp -o lc32-dependency-mapper-tests
       - name: Run dependency image mapper tests
         run: ./lc32-dependency-mapper-tests
+      - name: Build coordinated dyld image-set tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32ProcessStack.cpp \
+            runtime/LC32MachODependencies.cpp \
+            runtime/LC32GuestPathResolver.cpp \
+            runtime/LC32DependencyLoadPlan.cpp \
+            runtime/LC32DependencyMapper.cpp \
+            runtime/LC32DyldHandoff.cpp \
+            runtime/LC32DyldImageSet.cpp \
+            runtime/tests/LC32DyldImageSetTests.cpp \
+            -o lc32-dyld-image-set-tests
+      - name: Run coordinated dyld image-set tests
+        run: ./lc32-dyld-image-set-tests
       - name: Build dyld boot execution tests
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror \
