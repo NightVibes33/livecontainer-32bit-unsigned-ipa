@@ -393,6 +393,24 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             }
             return ok(number, 0, "gettimeofday");
         }
+        case 338: {
+            std::string path;
+            if (!readCString(state.r[0], path)) return fail(number, EFAULT, "stat64 path");
+            std::string hostPath;
+            int pathError = 0;
+            if (!resolveGuestPath(path, hostPath, pathError)) {
+                return fail(number, pathError ? pathError : ENOENT, "stat64 guest path");
+            }
+            struct stat host{};
+            if (::stat(hostPath.c_str(), &host) != 0) {
+                return fail(number, errno, "stat64 host call");
+            }
+            const GuestStat64 guest = guestStat64(host);
+            if (!memory_.write || !memory_.write(state.r[1], &guest, sizeof(guest))) {
+                return fail(number, EFAULT, "stat64 guest write");
+            }
+            return ok(number, 0, "stat64");
+        }
         case 339: {
             const int guestFd = static_cast<int>(state.r[0]);
             const uint32_t statAddress = state.r[1];
