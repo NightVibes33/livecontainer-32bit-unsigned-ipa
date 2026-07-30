@@ -19,6 +19,11 @@ constexpr uint32_t kMachTrapBase = 0xffffffe0u;
 constexpr uint32_t kGuestOpenAccessMode = 0x3u;
 constexpr uint32_t kGuestOpenCreate = 0x0200u;
 constexpr uint32_t kGuestOpenTruncate = 0x0400u;
+constexpr uint32_t kGuestOpenCloseExec = 0x01000000u;
+constexpr uint32_t kGuestFdCloseExec = 1u;
+constexpr uint32_t kFcntlGetFd = 1u;
+constexpr uint32_t kFcntlSetFd = 2u;
+constexpr uint32_t kFcntlGetFl = 3u;
 constexpr size_t kMaximumTransfer = 16u * 1024u * 1024u;
 
 TrapResult ok(uint32_t number, int32_t value, const char* detail) {
@@ -46,7 +51,7 @@ DarwinSyscalls::DarwinSyscalls(SyscallMemory memory, std::string guestRoot)
 
 DarwinSyscalls::~DarwinSyscalls() {
     for (const auto& entry : guestFiles_) {
-        ::close(entry.second);
+        ::close(entry.second.hostFd);
     }
 }
 
@@ -131,12 +136,14 @@ bool DarwinSyscalls::resolveGuestPath(const std::string& guestPath,
     return true;
 }
 
-int DarwinSyscalls::allocateGuestFd(int hostFd) {
+int DarwinSyscalls::allocateGuestFd(int hostFd,
+                                    uint32_t openFlags,
+                                    uint32_t descriptorFlags) {
     for (int attempts = 0; attempts < INT_MAX - 3; ++attempts) {
         if (nextGuestFd_ < 3) nextGuestFd_ = 3;
         const int candidate = nextGuestFd_++;
         if (guestFiles_.find(candidate) == guestFiles_.end()) {
-            guestFiles_.emplace(candidate, hostFd);
+            guestFiles_.emplace(candidate, GuestFile{hostFd, openFlags, descriptorFlags});
             return candidate;
         }
     }
@@ -197,7 +204,7 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             const auto file = guestFiles_.find(guestFd);
             if (file == guestFiles_.end()) return fail(number, EBADF, "read guest fd");
             std::vector<uint8_t> buffer(count);
-            const ssize_t bytesRead = ::read(file->second, buffer.data(), count);
+            const ssize_t bytesRead = ::read(file->second.hostFd, buffer.data(), count);
             if (bytesRead < 0) return fail(number, errno, "read host call");
             if (bytesRead != 0 &&
                 (!memory_.write || !memory_.write(bufferAddress, buffer.data(), static_cast<size_t>(bytesRead)))) {
@@ -237,7 +244,9 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
 #endif
             const int hostFd = ::open(hostPath.c_str(), hostFlags);
             if (hostFd < 0) return fail(number, errno, "open host call");
-            const int guestFd = allocateGuestFd(hostFd);
+            const uint32_t descriptorFlags =
+                (flags & kGuestOpenCloseExec) != 0 ? kGuestFdCloseExec : 0u;
+            const int guestFd = allocateGuestFd(hostFd, flags, descriptorFlags);
             if (guestFd < 0) {
                 ::close(hostFd);
                 return fail(number, EMFILE, "open guest fd table");
@@ -251,7 +260,7 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 if (guestFd >= 0 && guestFd <= 2) return ok(number, 0, "close standard fd virtualized");
                 return fail(number, EBADF, "close guest fd");
             }
-            const int hostFd = file->second;
+            const int hostFd = file->second.hostFd;
             guestFiles_.erase(file);
             if (::close(hostFd) != 0) return fail(number, errno, "close host call");
             return ok(number, 0, "close");
@@ -259,8 +268,42 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
         case 20: return ok(number, static_cast<int32_t>(::getpid()), "getpid");
         case 24: return ok(number, static_cast<int32_t>(::getuid()), "getuid");
         case 25: return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
-        case 47: return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 33: {
+            std::string path;
+            if (!readCString(state.r[0], path)) return fail(number, EFAULT, "access path");
+            const int mode = static_cast<int>(state.r[1]);
+            if ((mode & ~7) != 0) return fail(number, EINVAL, "access mode");
+            if ((mode & W_OK) != 0) return fail(number, EROFS, "access read-only guest root");
+            std::string hostPath;
+            int pathError = 0;
+            if (!resolveGuestPath(path, hostPath, pathError)) {
+                return fail(number, pathError ? pathError : ENOENT, "access guest path");
+            }
+            if (::access(hostPath.c_str(), mode & (R_OK | X_OK)) != 0) {
+                return fail(number, errno, "access host call");
+            }
+            return ok(number, 0, "access");
+        }
         case 43: return ok(number, static_cast<int32_t>(::getegid()), "getegid");
+        case 47: return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 92: {
+            const int guestFd = static_cast<int>(state.r[0]);
+            const uint32_t command = state.r[1];
+            const uint32_t argument = state.r[2];
+            const auto file = guestFiles_.find(guestFd);
+            if (file == guestFiles_.end()) return fail(number, EBADF, "fcntl guest fd");
+            switch (command) {
+                case kFcntlGetFd:
+                    return ok(number, static_cast<int32_t>(file->second.descriptorFlags), "fcntl F_GETFD");
+                case kFcntlSetFd:
+                    file->second.descriptorFlags = argument & kGuestFdCloseExec;
+                    return ok(number, 0, "fcntl F_SETFD");
+                case kFcntlGetFl:
+                    return ok(number, static_cast<int32_t>(file->second.openFlags), "fcntl F_GETFL");
+                default:
+                    return fail(number, EINVAL, "fcntl unsupported command");
+            }
+        }
         case 116: {
             const uint32_t tvAddress = state.r[0];
             if (!tvAddress) return ok(number, 0, "gettimeofday(null)");
