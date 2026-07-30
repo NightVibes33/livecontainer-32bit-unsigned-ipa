@@ -151,10 +151,13 @@ int LC32Main(int argc, char** argv) {
         }
         for (const auto& dependency : metadata.dependencies) {
             const std::string& path = dependency.path;
-            logEvent(dependency.weak ? "cleanroom-weak-dependency" : "cleanroom-dependency", path);
+            const bool isWeak = dependency.kind == lc32::DependencyKind::Weak;
+            logEvent(isWeak ? "cleanroom-weak-dependency" : "cleanroom-dependency", path);
         }
         const auto required = std::find_if(metadata.dependencies.begin(), metadata.dependencies.end(),
-            [](const lc32::MachODependency& dependency) { return !dependency.weak; });
+            [](const lc32::MachODependency& dependency) {
+                return dependency.kind != lc32::DependencyKind::Weak;
+            });
         if (required != metadata.dependencies.end()) {
             return failWith(72, "cleanroom-bridge-required", required->path);
         }
