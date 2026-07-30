@@ -95,3 +95,12 @@ jobs:
             -o lc32-dyld-boot-session-tests
       - name: Run dyld boot execution tests
         run: ./lc32-dyld-boot-session-tests
+      - name: Build Mach-O dependency tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32MachODependencies.cpp \
+            runtime/tests/LC32MachODependenciesTests.cpp \
+            -o lc32-macho-dependency-tests
+      - name: Run Mach-O dependency tests
+        run: ./lc32-macho-dependency-tests
