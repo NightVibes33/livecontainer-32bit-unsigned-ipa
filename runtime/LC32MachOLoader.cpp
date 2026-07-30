@@ -10,6 +10,8 @@ constexpr uint32_t FAT_CIGAM = 0xbebafecau;
 constexpr int32_t CPU_TYPE_ARM = 12;
 constexpr int32_t CPU_SUBTYPE_ARM_V7 = 9;
 constexpr int32_t CPU_SUBTYPE_ARM_V7S = 11;
+constexpr uint32_t MH_EXECUTE = 0x2u;
+constexpr uint32_t MH_DYLINKER = 0x7u;
 constexpr uint32_t LC_SEGMENT = 0x1u;
 constexpr uint32_t LC_UNIXTHREAD = 0x5u;
 constexpr uint32_t LC_MAIN = 0x80000028u;
@@ -140,9 +142,15 @@ MachOLoadResult loadArmv7MachO(const uint8_t* data,
         commandOff += lc.cmdsize;
     }
 
-    if (result.entryPoint == 0) { result.error = "no LC_MAIN or usable LC_UNIXTHREAD entry"; return result; }
-    if (!haveThreadEntry) result.thumb = (result.entryPoint & 1u) != 0;
-    result.entryPoint &= ~1u;
+    const bool requiresEntryPoint = mh.filetype == MH_EXECUTE || mh.filetype == MH_DYLINKER;
+    if (requiresEntryPoint && result.entryPoint == 0) {
+        result.error = "no LC_MAIN or usable LC_UNIXTHREAD entry";
+        return result;
+    }
+    if (result.entryPoint != 0) {
+        if (!haveThreadEntry) result.thumb = (result.entryPoint & 1u) != 0;
+        result.entryPoint &= ~1u;
+    }
     result.ok = true;
     return result;
 }
