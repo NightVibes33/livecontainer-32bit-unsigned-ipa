@@ -39,6 +39,12 @@ constexpr uint32_t kMapAnonymous = 0x1000u;
 constexpr uint32_t kPageSize = 4096u;
 constexpr uint32_t kMaximumMapping = 64u * 1024u * 1024u;
 constexpr size_t kMaximumTransfer = 16u * 1024u * 1024u;
+constexpr uint32_t kMsAsync = 0x0001u;
+constexpr uint32_t kMsInvalidate = 0x0002u;
+constexpr uint32_t kMsKillPages = 0x0004u;
+constexpr uint32_t kMsDeactivate = 0x0008u;
+constexpr uint32_t kMsSync = 0x0010u;
+constexpr int kMaximumAdvice = 9;
 
 #pragma pack(push, 4)
 struct GuestTimespec32 {
@@ -152,6 +158,26 @@ bool alignPage(uint32_t value, uint32_t& out) {
     if (aligned > UINT32_MAX) return false;
     out = static_cast<uint32_t>(aligned);
     return true;
+}
+
+
+bool mappedPageRange(const SyscallMemory& memory,
+                     uint32_t address,
+                     uint32_t length) {
+    if (!memory.read || length == 0 ||
+        (address & (kPageSize - 1u)) != 0) {
+        return false;
+    }
+    uint32_t mappedLength = 0;
+    if (!alignPage(length, mappedLength) || mappedLength == 0) return false;
+    const uint64_t end = static_cast<uint64_t>(address) + mappedLength;
+    if (end > 0x100000000ull) return false;
+
+    uint8_t probe = 0;
+    for (uint64_t page = address; page < end; page += kPageSize) {
+        if (!memory.read(static_cast<uint32_t>(page), &probe, 1)) return false;
+    }
+    return memory.read(static_cast<uint32_t>(end - 1u), &probe, 1);
 }
 } // namespace
 
@@ -404,6 +430,27 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             return ok(number, static_cast<int32_t>(::getegid()), "getegid");
         case 47:
             return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 65: {
+            const uint32_t address = state.r[0];
+            const uint32_t length = state.r[1];
+            const uint32_t flags = state.r[2];
+            const uint32_t supported = kMsAsync | kMsInvalidate |
+                                       kMsKillPages | kMsDeactivate | kMsSync;
+            if ((flags & ~supported) != 0 ||
+                (flags & kMsAsync) != 0 && (flags & kMsSync) != 0) {
+                return fail(number, EINVAL, "msync flags");
+            }
+            if (length == 0 || length > kMaximumMapping ||
+                (address & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "msync range");
+            }
+            if (!mappedPageRange(memory_, address, length)) {
+                return fail(number, ENOMEM, "msync unmapped range");
+            }
+            // Guest mappings are private memory or read-only file snapshots;
+            // there is no writable host backing store to flush.
+            return ok(number, 0, "msync virtual no-op");
+        }
         case 73: {
             const uint32_t address = state.r[0];
             const uint32_t length = state.r[1];
@@ -447,6 +494,24 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, ENOMEM, "mprotect guest range");
             }
             return ok(number, 0, "mprotect");
+        }
+        case 75: {
+            const uint32_t address = state.r[0];
+            const uint32_t length = state.r[1];
+            const int advice = static_cast<int>(state.r[2]);
+            if (advice < 0 || advice > kMaximumAdvice) {
+                return fail(number, EINVAL, "madvise behavior");
+            }
+            if (length == 0 || length > kMaximumMapping ||
+                (address & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "madvise range");
+            }
+            if (!mappedPageRange(memory_, address, length)) {
+                return fail(number, ENOMEM, "madvise unmapped range");
+            }
+            // Advice changes host paging policy only. The interpreter keeps
+            // deterministic guest bytes and treats valid hints as successful.
+            return ok(number, 0, "madvise virtual no-op");
         }
         case 92: {
             const int guestFd = static_cast<int>(state.r[0]);

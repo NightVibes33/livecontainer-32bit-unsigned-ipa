@@ -50,6 +50,8 @@ int main() {
     constexpr uint32_t kMapFixed = 0x0010u;
     constexpr uint32_t kMapJit = 0x0800u;
     constexpr uint32_t kMapAnonymous = 0x1000u;
+    constexpr uint32_t kMsAsync = 0x0001u;
+    constexpr uint32_t kMsSync = 0x0010u;
 
     std::vector<uint8_t> lowMemory(0x4000u);
     std::vector<Region> regions;
@@ -437,6 +439,70 @@ int main() {
     state.r[1] = 0x1000u;
     const auto emptyUnmap = rooted.dispatch(state, 0x80u, false);
     assert(emptyUnmap.handled && emptyUnmap.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 65;
+    state.r[0] = anonymousAddress;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMsSync;
+    const auto synchronized = rooted.dispatch(state, 0x80u, false);
+    assert(synchronized.handled && synchronized.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 65;
+    state.r[0] = anonymousAddress;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMsAsync | kMsSync;
+    const auto conflictingSync = rooted.dispatch(state, 0x80u, false);
+    assert(conflictingSync.handled && conflictingSync.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 65;
+    state.r[0] = anonymousAddress + 1u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMsSync;
+    const auto unalignedSync = rooted.dispatch(state, 0x80u, false);
+    assert(unalignedSync.handled && unalignedSync.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 65;
+    state.r[0] = 0x6a000000u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kMsSync;
+    const auto missingSync = rooted.dispatch(state, 0x80u, false);
+    assert(missingSync.handled && missingSync.errorNumber == ENOMEM);
+
+    state = {};
+    state.r[12] = 75;
+    state.r[0] = anonymousAddress + 0x1000u;
+    state.r[1] = 1u;
+    state.r[2] = 3u;
+    const auto willNeed = rooted.dispatch(state, 0x80u, false);
+    assert(willNeed.handled && willNeed.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 75;
+    state.r[0] = anonymousAddress + 0x1000u;
+    state.r[1] = 0x1000u;
+    state.r[2] = 99u;
+    const auto invalidAdvice = rooted.dispatch(state, 0x80u, false);
+    assert(invalidAdvice.handled && invalidAdvice.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 75;
+    state.r[0] = anonymousAddress + 1u;
+    state.r[1] = 0x1000u;
+    state.r[2] = 0u;
+    const auto unalignedAdvice = rooted.dispatch(state, 0x80u, false);
+    assert(unalignedAdvice.handled && unalignedAdvice.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 75;
+    state.r[0] = 0x6b000000u;
+    state.r[1] = 0x1000u;
+    state.r[2] = 0u;
+    const auto missingAdvice = rooted.dispatch(state, 0x80u, false);
+    assert(missingAdvice.handled && missingAdvice.errorNumber == ENOMEM);
 
     state = {};
     state.r[12] = 92;
