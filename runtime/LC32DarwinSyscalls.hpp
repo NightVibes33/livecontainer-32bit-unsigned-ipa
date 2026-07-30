@@ -5,9 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <dirent.h>
+#include <deque>
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace lc32 {
 
@@ -71,6 +73,8 @@ private:
     SyscallMemory memory_;
     std::string guestRoot_;
     std::unordered_map<int, GuestFile> guestFiles_;
+    std::unordered_map<uint32_t, MachPort> machPorts_;
+    uint32_t nextMachPort_ = 0x200u;
     int nextGuestFd_ = 3;
     uint32_t nextMmapAddress_ = 0x50000000u;
 };

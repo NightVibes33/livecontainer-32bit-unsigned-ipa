@@ -145,6 +145,69 @@ int main() {
     assert(taskSelf.handled && taskSelf.trapClass == TrapClass::Mach);
     assert(state.r[0] == 0x102u);
 
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-26);
+    const auto replyPort = syscalls.dispatch(state, 0, false);
+    assert(replyPort.handled && replyPort.errorNumber == 0);
+    const uint32_t replyName = state.r[0];
+    assert(replyName >= 0x200u);
+
+    constexpr uint32_t kMachMessageAddress = 0x0100u;
+    constexpr uint32_t kMachSendMsg = 0x00000001u;
+    constexpr uint32_t kMachReceiveMsg = 0x00000002u;
+    constexpr uint32_t kMachReceiveTimedOut = 0x10004003u;
+    constexpr uint32_t kMachReceiveTooLarge = 0x10004004u;
+    uint32_t messageHeader[6] = {19u, 28u, replyName, 0u, 0u, 0x1234u};
+    uint32_t payloadWord = 0xfeedfaceu;
+    std::memcpy(lowMemory.data() + kMachMessageAddress,
+                messageHeader,
+                sizeof(messageHeader));
+    std::memcpy(lowMemory.data() + kMachMessageAddress + sizeof(messageHeader),
+                &payloadWord,
+                sizeof(payloadWord));
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachSendMsg;
+    state.r[2] = 28u;
+    const auto machSend = syscalls.dispatch(state, 0, false);
+    assert(machSend.handled && state.r[0] == 0u);
+
+    std::memset(lowMemory.data() + kMachMessageAddress, 0, 32u);
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 24u;
+    state.r[4] = replyName;
+    const auto machSmallReceive = syscalls.dispatch(state, 0, false);
+    assert(machSmallReceive.handled && state.r[0] == kMachReceiveTooLarge);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 32u;
+    state.r[4] = replyName;
+    const auto machReceive = syscalls.dispatch(state, 0, false);
+    assert(machReceive.handled && state.r[0] == 0u);
+    uint32_t receivedId = 0;
+    uint32_t receivedPayload = 0;
+    std::memcpy(&receivedId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&receivedPayload, lowMemory.data() + kMachMessageAddress + 24u, 4u);
+    assert(receivedId == 0x1234u && receivedPayload == payloadWord);
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-31);
+    state.r[0] = kMachMessageAddress;
+    state.r[1] = kMachReceiveMsg;
+    state.r[3] = 32u;
+    state.r[4] = replyName;
+    const auto machEmptyReceive = syscalls.dispatch(state, 0, false);
+    assert(machEmptyReceive.handled && state.r[0] == kMachReceiveTimedOut);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
