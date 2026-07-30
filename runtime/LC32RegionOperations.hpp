@@ -1,5 +1,8 @@
 #pragma once
 
+// Byte-preserving region split operations shared by both no-JIT boot paths.
+// Callers validate page alignment and protection policy before invoking them.
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
