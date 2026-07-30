@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 
 namespace lc32 {
 
@@ -32,7 +33,11 @@ struct TrapResult {
 
 class DarwinSyscalls {
 public:
-    explicit DarwinSyscalls(SyscallMemory memory);
+    explicit DarwinSyscalls(SyscallMemory memory, std::string guestRoot = {});
+    ~DarwinSyscalls();
+
+    DarwinSyscalls(const DarwinSyscalls&) = delete;
+    DarwinSyscalls& operator=(const DarwinSyscalls&) = delete;
 
     TrapResult dispatch(CPUState& state, uint32_t svcImmediate, bool thumbMode);
     bool readCString(uint32_t address, std::string& out, size_t limit = 4096) const;
@@ -41,8 +46,15 @@ private:
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
     TrapResult dispatchMach(CPUState& state, uint32_t number);
     void writeReturn(CPUState& state, const TrapResult& result) const;
+    bool resolveGuestPath(const std::string& guestPath,
+                          std::string& hostPath,
+                          int& errorNumber) const;
+    int allocateGuestFd(int hostFd);
 
     SyscallMemory memory_;
+    std::string guestRoot_;
+    std::unordered_map<int, int> guestFiles_;
+    int nextGuestFd_ = 3;
 };
 
 } // namespace lc32
