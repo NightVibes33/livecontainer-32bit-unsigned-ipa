@@ -1,0 +1,6 @@
+Build trigger for the completed architecture metadata repairs.
+
+Runtime detection commit: 97bc15cbb708200832aaebfcce7d57ea009aeb46
+Import refresh commit: 85d38c74b12d08457ee6b241dfc81056431fa66b
+
+The Mach-O executable is now authoritative over cached is32bit metadata.
