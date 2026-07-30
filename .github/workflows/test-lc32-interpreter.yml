@@ -81,3 +81,17 @@ jobs:
             -o lc32-dyld-handoff-tests
       - name: Run dyld handoff tests
         run: ./lc32-dyld-handoff-tests
+      - name: Build dyld boot execution tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32Interpreter.cpp \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32ProcessStack.cpp \
+            runtime/LC32DarwinSyscalls.cpp \
+            runtime/LC32DyldHandoff.cpp \
+            runtime/LC32DyldBootSession.cpp \
+            runtime/tests/LC32DyldBootSessionTests.cpp \
+            -o lc32-dyld-boot-session-tests
+      - name: Run dyld boot execution tests
+        run: ./lc32-dyld-boot-session-tests
