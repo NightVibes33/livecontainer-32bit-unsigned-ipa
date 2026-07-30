@@ -1,5 +1,6 @@
 name: Apply LC32 sysctl Patch
 
+# One-time branch applicator; removed after the runtime commit lands.
 on:
   pull_request:
     paths:
