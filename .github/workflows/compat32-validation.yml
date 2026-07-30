@@ -1,0 +1,136 @@
+name: Validate 32-bit IPA Compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: Direct URL to an authorized/decrypted IPA
+        required: true
+        type: string
+      ipa_sha256:
+        description: Optional expected SHA-256
+        required: false
+        type: string
+      sample_name:
+        description: Friendly sample name
+        required: false
+        default: custom-armv7-sample
+        type: string
+  pull_request:
+    paths:
+      - 'tools/**'
+      - '.github/workflows/compat32-validation.yml'
+      - '.github/workflows/unsigned-ipa.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-static-validate:
+    runs-on: macos-latest
+    env:
+      DERIVED_DATA: build/DerivedData
+      OUTPUT_IPA: LiveContainer-unsigned.ipa
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/checkout@v6
+        with:
+          repository: LiveContainer/LiveExec32
+          path: build/LiveExec32
+
+      - name: Prepare toolchain
+        run: |
+          set -euxo pipefail
+          brew install ldid
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Build LiveExec32
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          set -euxo pipefail
+          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' build/LiveExec32/Makefile
+          make -C build/LiveExec32 clean
+          make -C build/LiveExec32
+          LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name LiveExec32.app -print -quit)
+          test -n "$LIVEEXEC_APP"
+          test -f "$LIVEEXEC_APP/LiveExec32"
+          echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+
+      - name: Build LiveContainer with ARMv7 routing
+        run: |
+          set -euxo pipefail
+          xcodebuild build \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported'
+
+      - name: Package validation build
+        run: |
+          set -euxo pipefail
+          APP=$(find "$DERIVED_DATA/Build/Products/Release-iphoneos" -maxdepth 2 -type d -name LiveContainer.app -print -quit)
+          test -n "$APP"
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$LIVEEXEC_APP" "$APP/LiveExec32.app"
+          tools/package-unsigned-ipa.sh "$APP" "$OUTPUT_IPA"
+          test -f "$OUTPUT_IPA"
+
+      - name: Download authorized sample
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          set -euxo pipefail
+          case "$IPA_URL" in
+            https://*) ;;
+            *) echo 'Only HTTPS IPA URLs are accepted' >&2; exit 64 ;;
+          esac
+          curl --fail --location --retry 3 --max-time 1800 "$IPA_URL" -o sample.ipa
+          test -s sample.ipa
+
+      - name: Validate sample against packaged app
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_SHA: ${{ inputs.ipa_sha256 }}
+        run: |
+          set -euxo pipefail
+          args=(sample.ipa --livecontainer-ipa "$OUTPUT_IPA" --output compat32-report.json)
+          if [ -n "$EXPECTED_SHA" ]; then args+=(--expected-sha256 "$EXPECTED_SHA"); fi
+          python3 tools/compat32-report.py "${args[@]}"
+
+      - name: Verify report schema
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          python3 - <<'PY'
+          import json
+          r=json.load(open('compat32-report.json'))
+          assert r['schemaVersion']==1
+          assert r['guest']['armv7'] is True
+          assert r['guest']['decrypted'] is True
+          assert r['liveContainer']['provided'] is True
+          assert r['result']=='pass', r['failures']
+          print('Static/package compatibility gate passed.')
+          print('Physical-device proof is still required for:', *r['deviceProofStillRequired'], sep='\n- ')
+          PY
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat32-${{ inputs.sample_name || 'pr-check' }}
+          path: |
+            LiveContainer-unsigned.ipa
+            compat32-report.json
+          if-no-files-found: warn
