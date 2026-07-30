@@ -1,5 +1,6 @@
 #include "LC32DyldBootSession.hpp"
 #include "LC32MachODependencies.hpp"
+#include "LC32MachOImports.hpp"
 #include "LC32VirtualRuntime.hpp"
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -97,6 +99,14 @@ std::string envValue(const char* key, const char* fallback = "") {
     return value && *value ? value : fallback;
 }
 
+std::string symbolDetail(const std::string& imported,
+                         const lc32::VirtualRuntimeSymbol& binding) {
+    std::ostringstream detail;
+    detail << imported << " -> " << binding.canonicalName
+           << "@0x" << std::hex << binding.guestAddress;
+    return detail.str();
+}
+
 } // namespace
 
 extern "C" __attribute__((visibility("default")))
@@ -109,7 +119,9 @@ int LC32Main(int argc, char** argv) {
     if ((!executable || !*executable) && argc > 1) executable = argv[1];
     const char* dyld = std::getenv("LC32_GUEST_DYLD");
     const std::string guestRoot = envValue("LC32_GUEST_ROOTFS");
-    if (!executable || !*executable) return failWith(64, "configuration-error", "LC32_GUEST_EXECUTABLE is missing");
+    if (!executable || !*executable) {
+        return failWith(64, "configuration-error", "LC32_GUEST_EXECUTABLE is missing");
+    }
     logEvent("plugin-start", executable);
 
     std::vector<uint8_t> appImage;
@@ -121,10 +133,12 @@ int LC32Main(int argc, char** argv) {
     const bool hasGuestDyld = dyld && *dyld && readFile(dyld, dyldImage, error);
     if (!hasGuestDyld) {
         logEvent("cleanroom-loader-start", "using bundled virtual base runtime");
-        lc32::MachODependencyResult metadata = lc32::parseArmv7MachODependencies(appImage.data(), appImage.size());
+        const lc32::MachODependencyResult metadata =
+            lc32::parseArmv7MachODependencies(appImage.data(), appImage.size());
         if (!metadata.ok) return failWith(70, "cleanroom-loader-parse-failed", metadata.error);
         if (metadata.dependencies.empty()) {
-            return failWith(72, "cleanroom-loader-blocked", "application has no declared dependencies but direct entry startup is not implemented");
+            return failWith(72, "cleanroom-loader-blocked",
+                            "application has no declared dependencies but direct entry startup is not implemented");
         }
 
         const lc32::MachODependency* firstUnsupported = nullptr;
@@ -132,7 +146,8 @@ int LC32Main(int argc, char** argv) {
             const bool isWeak = dependency.kind == lc32::DependencyKind::Weak;
             const auto virtualImage = lc32::resolveVirtualRuntimeImage(dependency.path);
             if (virtualImage.kind != lc32::VirtualRuntimeImageKind::Unsupported) {
-                std::string detail = virtualImage.canonicalPath + " [" + lc32::virtualRuntimeImageKindName(virtualImage.kind) + "]";
+                const std::string detail = virtualImage.canonicalPath + " [" +
+                    lc32::virtualRuntimeImageKindName(virtualImage.kind) + "]";
                 logEvent("cleanroom-virtual-image-resolved", detail, 0,
                          static_cast<uint32_t>(virtualImage.capabilities.size()));
                 for (const auto& capability : virtualImage.capabilities) {
@@ -146,8 +161,44 @@ int LC32Main(int argc, char** argv) {
         if (firstUnsupported) {
             return failWith(72, "cleanroom-bridge-required", firstUnsupported->path);
         }
-        return failWith(73, "cleanroom-entry-required",
-                        "all declared base-runtime images resolved; relocation, symbol binding, and direct ARMv7 entry startup are next");
+
+        const lc32::MachOImportResult imports =
+            lc32::parseArmv7MachOImports(appImage.data(), appImage.size());
+        if (!imports.ok) return failWith(70, "cleanroom-import-parse-failed", imports.error);
+        logEvent("cleanroom-import-table", "undefined external symbols",
+                 0, static_cast<uint32_t>(imports.symbols.size()));
+
+        std::string firstUnknownSymbol;
+        std::string firstPlannedSymbol;
+        uint32_t executableBindings = 0;
+        uint32_t plannedBindings = 0;
+        for (const std::string& imported : imports.symbols) {
+            const lc32::VirtualRuntimeSymbol binding = lc32::resolveVirtualRuntimeSymbol(imported);
+            if (binding.imageKind == lc32::VirtualRuntimeImageKind::Unsupported) {
+                logEvent("cleanroom-symbol-unresolved", imported);
+                if (firstUnknownSymbol.empty()) firstUnknownSymbol = imported;
+                continue;
+            }
+            const std::string detail = symbolDetail(imported, binding);
+            if (binding.executable) {
+                ++executableBindings;
+                logEvent("cleanroom-virtual-symbol-ready", detail, binding.guestAddress);
+            } else {
+                ++plannedBindings;
+                logEvent("cleanroom-virtual-symbol-planned", detail, binding.guestAddress);
+                if (firstPlannedSymbol.empty()) firstPlannedSymbol = imported;
+            }
+        }
+        logEvent("cleanroom-symbol-summary", "ready/planned", executableBindings, plannedBindings);
+
+        if (!firstUnknownSymbol.empty()) {
+            return failWith(74, "cleanroom-symbol-required", firstUnknownSymbol);
+        }
+        if (!firstPlannedSymbol.empty()) {
+            return failWith(75, "cleanroom-symbol-implementation-required", firstPlannedSymbol);
+        }
+        return failWith(73, "cleanroom-binding-required",
+                        "base-runtime imports have executable clean-room implementations; bind indirect symbol pointers and enter ARMv7 main");
     }
 
     lc32::DyldHandoffSpec spec;
@@ -157,7 +208,9 @@ int LC32Main(int argc, char** argv) {
     spec.dyldSize = dyldImage.size();
     spec.executablePath = executable;
     spec.stack.argv.push_back(executable);
-    for (int index = 2; index < argc; ++index) if (argv[index]) spec.stack.argv.emplace_back(argv[index]);
+    for (int index = 2; index < argc; ++index) {
+        if (argv[index]) spec.stack.argv.emplace_back(argv[index]);
+    }
 
     const std::string home = envValue("LC32_GUEST_HOME", envValue("HOME").c_str());
     const std::string tmp = envValue("TMPDIR", "/tmp");
@@ -171,15 +224,19 @@ int LC32Main(int argc, char** argv) {
     const uint64_t maxSteps = stepLimit();
     logEvent("dyld-boot-dispatch", dyld, 0, static_cast<uint32_t>(maxSteps));
     lc32::DyldBootResult result = session.boot(spec, maxSteps);
-    for (const lc32::DyldBootEvent& event : result.events) logEvent(event.stage, event.detail, event.pc, event.value);
+    for (const lc32::DyldBootEvent& event : result.events) {
+        logEvent(event.stage, event.detail, event.pc, event.value);
+    }
     if (!result.prepared || !result.handoff.ok) {
-        const std::string detail = !result.handoff.error.empty() ? result.handoff.error : result.cpuResult.detail;
+        const std::string detail = !result.handoff.error.empty()
+            ? result.handoff.error : result.cpuResult.detail;
         gLastError = "boot-preparation-failed: " + detail;
         logEvent("boot-preparation-failed", detail, result.cpuResult.pc, result.cpuResult.instruction);
         return 70;
     }
     if (result.exited) {
-        logEvent("guest-exited", std::to_string(result.exitCode), result.cpuResult.pc, static_cast<uint32_t>(result.cpuResult.steps));
+        logEvent("guest-exited", std::to_string(result.exitCode), result.cpuResult.pc,
+                 static_cast<uint32_t>(result.cpuResult.steps));
         return result.exitCode;
     }
     std::string stopDetail = result.cpuResult.detail;
