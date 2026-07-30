@@ -1,0 +1,129 @@
+name: Test LC32 No-JIT Runtime
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'runtime/**'
+      - 'tools/fix-lc32-interpreter-mask.py'
+      - '.github/workflows/test-lc32-interpreter.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  no-jit-runtime-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Apply decoder correctness fixes
+        run: |
+          set -euxo pipefail
+          python3 tools/fix-lc32-interpreter-mask.py
+          grep -q '0x0ff00000u' runtime/LC32Interpreter.cpp
+      - name: Build interpreter tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32Interpreter.cpp runtime/tests/LC32InterpreterTests.cpp -o lc32-interpreter-tests
+      - name: Run interpreter tests
+        run: ./lc32-interpreter-tests
+      - name: Build ARMv7 Mach-O loader tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/tests/LC32MachOLoaderTests.cpp -o lc32-macho-loader-tests
+      - name: Run ARMv7 Mach-O loader tests
+        run: ./lc32-macho-loader-tests
+      - name: Build clean-room virtual runtime tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/tests/LC32VirtualRuntimeTests.cpp -o lc32-virtual-runtime-tests
+      - name: Run clean-room virtual runtime tests
+        run: ./lc32-virtual-runtime-tests
+      - name: Build ARMv7 virtual binding tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/tests/LC32MachOVirtualBindingsTests.cpp -o lc32-macho-virtual-binding-tests
+      - name: Run ARMv7 virtual binding tests
+        run: ./lc32-macho-virtual-binding-tests
+      - name: Build Darwin syscall tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32DarwinSyscalls.cpp runtime/tests/LC32DarwinSyscallsTests.cpp -o lc32-darwin-syscall-tests
+      - name: Run Darwin syscall tests
+        run: ./lc32-darwin-syscall-tests
+      - name: Build Darwin process stack tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32ProcessStack.cpp runtime/tests/LC32ProcessStackTests.cpp -o lc32-process-stack-tests
+      - name: Run Darwin process stack tests
+        run: ./lc32-process-stack-tests
+      - name: Build no-JIT ARMv7 boot-session tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32Interpreter.cpp runtime/LC32MachOLoader.cpp runtime/LC32DarwinSyscalls.cpp runtime/LC32BootSession.cpp runtime/tests/LC32BootSessionTests.cpp -o lc32-boot-session-tests
+      - name: Run no-JIT ARMv7 boot-session tests
+        run: ./lc32-boot-session-tests
+      - name: Build dyld handoff tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/LC32ProcessStack.cpp runtime/LC32DyldHandoff.cpp runtime/tests/LC32DyldHandoffTests.cpp -o lc32-dyld-handoff-tests
+      - name: Run dyld handoff tests
+        run: ./lc32-dyld-handoff-tests
+      - name: Build Mach-O dependency tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachODependencies.cpp runtime/tests/LC32MachODependenciesTests.cpp -o lc32-macho-dependency-tests
+      - name: Run Mach-O dependency tests
+        run: ./lc32-macho-dependency-tests
+      - name: Build guest path resolver tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32GuestPathResolver.cpp runtime/tests/LC32GuestPathResolverTests.cpp -o lc32-guest-path-resolver-tests
+      - name: Run guest path resolver tests
+        run: ./lc32-guest-path-resolver-tests
+      - name: Build dependency audit tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32GuestPathResolver.cpp runtime/LC32DependencyAudit.cpp runtime/tests/LC32DependencyAuditTests.cpp -o lc32-dependency-audit-tests
+      - name: Run dependency audit tests
+        run: ./lc32-dependency-audit-tests
+      - name: Build recursive dependency load-plan tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachODependencies.cpp runtime/LC32GuestPathResolver.cpp runtime/LC32DependencyLoadPlan.cpp runtime/tests/LC32DependencyLoadPlanTests.cpp -o lc32-dependency-load-plan-tests
+      - name: Run recursive dependency load-plan tests
+        run: ./lc32-dependency-load-plan-tests
+      - name: Build dependency image mapper tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/LC32DependencyMapper.cpp runtime/tests/LC32DependencyMapperTests.cpp -o lc32-dependency-mapper-tests
+      - name: Run dependency image mapper tests
+        run: ./lc32-dependency-mapper-tests
+      - name: Build coordinated dyld image-set tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32ProcessStack.cpp \
+            runtime/LC32MachODependencies.cpp \
+            runtime/LC32GuestPathResolver.cpp \
+            runtime/LC32DependencyLoadPlan.cpp \
+            runtime/LC32DependencyMapper.cpp \
+            runtime/LC32DyldHandoff.cpp \
+            runtime/LC32DyldImageSet.cpp \
+            runtime/tests/LC32DyldImageSetTests.cpp \
+            -o lc32-dyld-image-set-tests
+      - name: Run coordinated dyld image-set tests
+        run: ./lc32-dyld-image-set-tests
+      - name: Build dyld boot execution tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32Interpreter.cpp \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32ProcessStack.cpp \
+            runtime/LC32DarwinSyscalls.cpp \
+            runtime/LC32MachODependencies.cpp \
+            runtime/LC32GuestPathResolver.cpp \
+            runtime/LC32DependencyAudit.cpp \
+            runtime/LC32DependencyLoadPlan.cpp \
+            runtime/LC32DependencyMapper.cpp \
+            runtime/LC32DyldHandoff.cpp \
+            runtime/LC32DyldImageSet.cpp \
+            runtime/LC32DyldBootSession.cpp \
+            runtime/tests/LC32DyldBootSessionTests.cpp \
+            -o lc32-dyld-boot-session-tests
+      - name: Run dyld boot execution tests
+        run: ./lc32-dyld-boot-session-tests
+      - name: Build dyld boot image-set tests
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32Interpreter.cpp \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32ProcessStack.cpp \
+            runtime/LC32DarwinSyscalls.cpp \
+            runtime/LC32MachODependencies.cpp \
+            runtime/LC32GuestPathResolver.cpp \
+            runtime/LC32DependencyAudit.cpp \
+            runtime/LC32DependencyLoadPlan.cpp \
+            runtime/LC32DependencyMapper.cpp \
+            runtime/LC32DyldHandoff.cpp \
+            runtime/LC32DyldImageSet.cpp \
+            runtime/LC32DyldBootSession.cpp \
+            runtime/tests/LC32DyldBootImageSetTests.cpp \
+            -o lc32-dyld-boot-image-set-tests
+      - name: Run dyld boot image-set tests
+        run: ./lc32-dyld-boot-image-set-tests

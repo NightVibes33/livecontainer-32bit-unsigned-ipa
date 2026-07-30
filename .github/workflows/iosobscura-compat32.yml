@@ -1,0 +1,151 @@
+name: iOSObscura 32-bit Compatibility Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization_attestation:
+        description: 'Type I_HAVE_AUTHORIZATION to permit IPA downloads and testing'
+        required: true
+        default: ''
+      prefix:
+        description: 'Archive path prefix (for example Homebrew IPAs/ or iOS 6/)'
+        required: true
+        default: 'Homebrew IPAs/'
+      shard_count:
+        description: 'Number of parallel shards (1-20)'
+        required: true
+        default: '4'
+      max_files_per_shard:
+        description: 'Maximum IPAs tested by each shard'
+        required: true
+        default: '10'
+      max_bytes_per_shard:
+        description: 'Maximum bytes downloaded by each shard'
+        required: true
+        default: '1073741824'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          COUNT='${{ inputs.shard_count }}'
+          if ! [[ "$COUNT" =~ ^[0-9]+$ ]] || [ "$COUNT" -lt 1 ] || [ "$COUNT" -gt 20 ]; then
+            echo 'shard_count must be 1..20' >&2
+            exit 1
+          fi
+          python3 - "$COUNT" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          n = int(sys.argv[1])
+          print('matrix=' + json.dumps({'shard': list(range(n))}, separators=(',', ':')))
+          PY
+
+  build-livecontainer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+      - uses: actions/checkout@v6
+        with:
+          repository: LiveContainer/LiveExec32
+          path: build/LiveExec32
+      - name: Prepare Theos
+        run: |
+          set -euxo pipefail
+          brew install ldid
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Build LiveExec32
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          set -euxo pipefail
+          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' build/LiveExec32/Makefile
+          make -C build/LiveExec32 clean
+          make -C build/LiveExec32
+          LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name LiveExec32.app -print -quit)
+          test -n "$LIVEEXEC_APP"
+          echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+      - name: Build unsigned LiveContainer
+        run: |
+          set -euxo pipefail
+          xcodebuild build \
+            -project LiveContainer.xcodeproj \
+            -scheme LiveContainer \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' PROVISIONING_PROFILE_SPECIFIER='' \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported'
+          APP=$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 2 -type d -name LiveContainer.app -print -quit)
+          test -n "$APP"
+          rm -rf "$APP/LiveExec32.app"
+          ditto "$LIVEEXEC_APP" "$APP/LiveExec32.app"
+          tools/package-unsigned-ipa.sh "$APP" LiveContainer-compat32.ipa
+          python3 tools/compat32-report.py --help >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compat32-livecontainer
+          path: LiveContainer-compat32.ipa
+          if-no-files-found: error
+
+  validate:
+    needs: [prepare, build-livecontainer]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: compat32-livecontainer
+          path: build-input
+      - name: Require authorization attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.authorization_attestation }}' = 'I_HAVE_AUTHORIZATION' || {
+            echo 'authorization_attestation must equal I_HAVE_AUTHORIZATION' >&2
+            exit 1
+          }
+      - name: Catalog and validate bounded shard
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/iosobscura-batch.py \
+            --authorized --download \
+            --prefix '${{ inputs.prefix }}' \
+            --shard-index '${{ matrix.shard }}' \
+            --shard-count '${{ inputs.shard_count }}' \
+            --max-files '${{ inputs.max_files_per_shard }}' \
+            --max-bytes '${{ inputs.max_bytes_per_shard }}' \
+            --livecontainer-ipa build-input/LiveContainer-compat32.ipa \
+            --output-dir 'compat32-shard-${{ matrix.shard }}' \
+            2>&1 | tee 'compat32-shard-${{ matrix.shard }}.log'
+          echo "${PIPESTATUS[0]}" > 'compat32-shard-${{ matrix.shard }}/validator-exit-code.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compat32-shard-${{ matrix.shard }}
+          path: |
+            compat32-shard-${{ matrix.shard }}/catalog.json
+            compat32-shard-${{ matrix.shard }}/summary.json
+            compat32-shard-${{ matrix.shard }}/reports/*.json
+            compat32-shard-${{ matrix.shard }}/validator-exit-code.txt
+            compat32-shard-${{ matrix.shard }}.log
+          if-no-files-found: warn

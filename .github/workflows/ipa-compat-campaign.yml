@@ -1,0 +1,210 @@
+name: Scan iOSObscura Against Current LC32 App
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ipa-compat-campaign.yml'
+      - 'tools/iosobscura-github-batch.py'
+      - 'tools/compat32-report.py'
+      - 'tools/validate-armv7-ipa.py'
+      - 'LiveContainer/LCBootstrap.m'
+      - 'runtime/**'
+  workflow_dispatch:
+    inputs:
+      start_index:
+        description: Zero-based archive index
+        required: true
+        default: '1000'
+      batch_size:
+        description: Archive IPAs in this resumable batch
+        required: true
+        default: '1000'
+      shard_count:
+        description: Parallel scanner jobs (1-100)
+        required: true
+        default: '40'
+      max_bytes_per_shard:
+        description: Declared download-byte cap per shard
+        required: true
+        default: '2147483648'
+      source_run_id:
+        description: Optional successful Build Unsigned IPA run
+        required: false
+        default: ''
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: iosobscura-current-lc32-${{ github.event.pull_request.number || github.ref }}-${{ inputs.start_index || '1000' }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.config.outputs.matrix }}
+      source_run_id: ${{ steps.app.outputs.run_id }}
+      head_sha: ${{ steps.config.outputs.head_sha }}
+      start_index: ${{ steps.config.outputs.start }}
+      batch_size: ${{ steps.config.outputs.batch }}
+      shard_count: ${{ steps.config.outputs.shards }}
+      max_bytes: ${{ steps.config.outputs.max_bytes }}
+    steps:
+      - id: config
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          START: ${{ inputs.start_index || '1000' }}
+          BATCH: ${{ inputs.batch_size || '1000' }}
+          SHARDS: ${{ inputs.shard_count || '40' }}
+          MAX_BYTES: ${{ inputs.max_bytes_per_shard || '2147483648' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          start, batch = int(os.environ['START']), int(os.environ['BATCH'])
+          shards, max_bytes = int(os.environ['SHARDS']), int(os.environ['MAX_BYTES'])
+          if start < 0 or not 1 <= batch <= 17000 or not 1 <= shards <= 100 or max_bytes < 1:
+              raise SystemExit('invalid campaign bounds')
+          print('head_sha=' + (os.environ.get('PR_SHA') or os.environ['GITHUB_SHA']))
+          print(f'start={start}\nbatch={batch}\nshards={shards}\nmax_bytes={max_bytes}')
+          print('matrix=' + json.dumps({'shard': list(range(shards))}, separators=(',', ':')))
+          PY
+
+      - id: app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.config.outputs.head_sha }}
+          REQUESTED: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${REQUESTED:-}"
+          for attempt in $(seq 1 120); do
+            [ -n "$RUN_ID" ] && break
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/unsigned-ipa.yml/runs?head_sha=$HEAD_SHA&per_page=20" > runs.json
+            read -r RUN_ID FAILED_ID < <(python3 - <<'PY'
+          import json
+          runs=json.load(open('runs.json')).get('workflow_runs',[])
+          ok=next((str(r['id']) for r in runs if r.get('conclusion')=='success'), '')
+          failed=next((str(r['id']) for r in runs if r.get('status')=='completed' and r.get('conclusion')!='success'), '')
+          print(ok, failed)
+          PY
+            )
+            if [ -n "${FAILED_ID:-}" ]; then
+              echo "Exact app build $FAILED_ID failed for $HEAD_SHA" >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          test -n "$RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+  scan:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+      - name: Download exact current app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p current-app
+          gh run download '${{ needs.prepare.outputs.source_run_id }}' --repo "$GITHUB_REPOSITORY" --name LiveContainer-unsigned-ipa --dir current-app
+          LC_IPA=$(find current-app -type f -iname '*.ipa' -print -quit)
+          test -n "$LC_IPA"
+          echo "LC_IPA=$LC_IPA" >> "$GITHUB_ENV"
+      - name: Validate archive shard
+        run: |
+          set -o pipefail
+          mkdir -p campaign-output
+          python3 tools/iosobscura-github-batch.py --authorized --download \
+            --start-index '${{ needs.prepare.outputs.start_index }}' \
+            --batch-size '${{ needs.prepare.outputs.batch_size }}' \
+            --shard-index '${{ matrix.shard }}' \
+            --shard-count '${{ needs.prepare.outputs.shard_count }}' \
+            --max-bytes '${{ needs.prepare.outputs.max_bytes }}' \
+            --livecontainer-ipa "$LC_IPA" \
+            --output-dir 'campaign-output/shard-${{ matrix.shard }}' \
+            2>&1 | tee 'campaign-output/shard-${{ matrix.shard }}.log'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iosobscura-current-lc32-shard-${{ matrix.shard }}
+          path: campaign-output
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 9
+
+  aggregate:
+    needs: [prepare, scan]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: iosobscura-current-lc32-shard-*
+          path: shards
+      - name: Merge reports
+        env:
+          START: ${{ needs.prepare.outputs.start_index }}
+          BATCH: ${{ needs.prepare.outputs.batch_size }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          BUILD_RUN: ${{ needs.prepare.outputs.source_run_id }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from collections import Counter
+          from pathlib import Path
+          rows=[]; catalogs=[]; summaries=[]
+          for p in Path('shards').rglob('results.jsonl'):
+            rows += [json.loads(x) for x in p.read_text(errors='replace').splitlines() if x.strip()]
+          for p in Path('shards').rglob('catalog.json'):
+            try: catalogs.append(json.loads(p.read_text()))
+            except Exception: pass
+          for p in Path('shards').rglob('summary.json'):
+            try: summaries.append(json.loads(p.read_text()))
+            except Exception: pass
+          rows.sort(key=lambda r:r.get('globalIndex',10**12))
+          classes=Counter(); deps=Counter(); failures=Counter()
+          for r in rows:
+            if r.get('result')=='pass' and r.get('armv7') and not r.get('arm64') and r.get('decrypted'): c='armv7-current-app-static-pass'
+            elif r.get('arm64'): c='contains-arm64'
+            elif r.get('armv7') and not r.get('decrypted'): c='encrypted-armv7'
+            elif r.get('armv7'): c='armv7-static-blocked'
+            else: c='not-armv7-or-invalid'
+            classes[c]+=1; deps.update(set(r.get('dependencies') or [])); failures.update(r.get('failures') or [])
+          total=max((x.get('totalCatalogIPAs',0) for x in catalogs+summaries),default=0)
+          start=int(os.environ['START']); end=min(total,start+int(os.environ['BATCH'])) if total else start+int(os.environ['BATCH'])
+          skipped=sum(len(x.get('skippedForByteBudget',[])) for x in catalogs)
+          hashes=sorted({x.get('liveContainerIPASHA256') for x in summaries if x.get('liveContainerIPASHA256')})
+          out=Path('campaign-final'); out.mkdir()
+          summary={'schemaVersion':2,'archive':'https://archive.org/download/iOSObscura','currentAppCommit':os.environ['HEAD_SHA'],
+            'currentAppBuildRunId':int(os.environ['BUILD_RUN']),'currentAppIPASHA256':hashes,'totalCatalogIPAs':total,
+            'batchStart':start,'batchEndExclusive':end,'nextStartIndex':end,'processed':len(rows),'skippedForByteBudget':skipped,
+            'classifications':dict(classes),'topDependencies':deps.most_common(250),'topFailures':failures.most_common(100),
+            'scope':'static integrity and compatibility against the exact current LC32 IPA'}
+          (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          (out/'results.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows))
+          md=['# iOSObscura against current LC32 app','',f"Processed **{len(rows)}** archive IPAs from index **{start}** to **{end-1}**.",'',
+              f"Current app commit: `{os.environ['HEAD_SHA']}`",f"Build run: `{os.environ['BUILD_RUN']}`",f"Next index: **{end}**",'',
+              '## Classifications','', '| Class | Count |','|---|---:|']
+          md += [f'| {k} | {v} |' for k,v in classes.most_common()]
+          md += ['', '## Top dependencies','', '| Dependency | Apps |','|---|---:|']
+          md += [f'| `{k}` | {v} |' for k,v in deps.most_common(100)]
+          (out/'report.md').write_text('\n'.join(md)+'\n')
+          print(json.dumps(summary,indent=2))
+          PY
+      - run: cat campaign-final/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iosobscura-current-lc32-batch-${{ needs.prepare.outputs.start_index }}
+          path: campaign-final
+          if-no-files-found: error
+          retention-days: 90

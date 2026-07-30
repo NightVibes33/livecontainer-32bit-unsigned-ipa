@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import UniformTypeIdentifiers
 
 enum JITEnablerType : Int, CaseIterable, Identifiable {
     var id: Int { rawValue }
@@ -66,6 +67,8 @@ struct LCSettingsView: View {
     @AppStorage("LCIgnoreJITOnLaunch") var ignoreJITOnLaunch = false
     #if is32BitSupported
     @AppStorage("selected32BitLayer") var liveExec32Path : String = ""
+    @StateObject private var rootfsImportFileAlert = AlertHelper<URL>()
+    @State private var armv7RootfsStatus = "Not installed"
     #endif
     @AppStorage("LCKeepSelectedWhenQuit") var keepSelectedWhenQuit = false
     @AppStorage("LCWaitForDebugger") var waitForDebugger = false
@@ -195,6 +198,30 @@ struct LCSettingsView: View {
                 } footer: {
                     Text("lc.settings.JitDesc".loc)
                 }
+
+                #if is32BitSupported
+                Section {
+                    Button {
+                        Task { await importArmv7Rootfs() }
+                    } label: {
+                        Text("Import ARMv7 RootFS Folder")
+                    }
+                    Button(role: .destructive) {
+                        removeArmv7Rootfs()
+                    } label: {
+                        Text("Remove ARMv7 RootFS")
+                    }
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(armv7RootfsStatus).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("32-bit Runtime")
+                } footer: {
+                    Text("Choose an extracted ARMv7 iOS root filesystem you are authorized to use. It must contain usr/lib/dyld and the required iOS frameworks. Apple runtime files are not bundled with LiveContainer.")
+                }
+                #endif
                 
                 Section{
                     Toggle(isOn: $dynamicColors) {
@@ -432,6 +459,13 @@ struct LCSettingsView: View {
             }, onDismiss: {
                 certificateImportFileAlert.close(result: nil)
             })
+            #if is32BitSupported
+            .betterFileImporter(isPresented: $rootfsImportFileAlert.show, types: [.folder], multiple: false, callback: { fileUrls in
+                rootfsImportFileAlert.close(result: fileUrls.first)
+            }, onDismiss: {
+                rootfsImportFileAlert.close(result: nil)
+            })
+            #endif
             .textFieldAlert(
                 isPresented: $certificateImportPasswordAlert.show,
                 title: "lc.settings.importCertificateInputPassword".loc,
@@ -448,6 +482,9 @@ struct LCSettingsView: View {
         }
         .navigationViewStyle(StackNavigationViewStyle())
         .onAppear() {
+            #if is32BitSupported
+            refreshArmv7RootfsStatus()
+            #endif
             if !isViewAppeared {
                 guard sharedModel.selectedTab == .settings, let link = sharedModel.deepLink else { return }
                 sharedModel.deepLink = nil
@@ -462,6 +499,86 @@ struct LCSettingsView: View {
         }
     }
     
+    #if is32BitSupported
+    private var armv7RootfsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("LiveExec32Runtime/rootfs", isDirectory: true)
+    }
+
+    private let armv7RequiredPaths = [
+        "usr/lib/dyld",
+        "System/Library/Frameworks/UIKit.framework/UIKit",
+        "System/Library/Frameworks/Foundation.framework/Foundation",
+        "System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+        "System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+        "System/Library/Frameworks/QuartzCore.framework/QuartzCore",
+        "System/Library/Frameworks/OpenGLES.framework/OpenGLES",
+        "System/Library/Frameworks/AudioToolbox.framework/AudioToolbox"
+    ]
+
+    func refreshArmv7RootfsStatus() {
+        let fm = FileManager.default
+        let missing = armv7RequiredPaths.filter {
+            !fm.isReadableFile(atPath: armv7RootfsURL.appendingPathComponent($0).path)
+        }
+        armv7RootfsStatus = missing.isEmpty ? "Ready" : "Missing \(missing.count) required files"
+    }
+
+    func importArmv7Rootfs() async {
+        guard let selectedURL = await rootfsImportFileAlert.open() else { return }
+        let fm = FileManager.default
+        let didAccess = selectedURL.startAccessingSecurityScopedResource()
+        defer { if didAccess { selectedURL.stopAccessingSecurityScopedResource() } }
+
+        let candidates = [selectedURL, selectedURL.appendingPathComponent("rootfs", isDirectory: true)]
+        guard let sourceRoot = candidates.first(where: {
+            fm.isReadableFile(atPath: $0.appendingPathComponent("usr/lib/dyld").path)
+        }) else {
+            errorInfo = "The selected folder does not contain a readable usr/lib/dyld. Select the root of an extracted ARMv7 iOS filesystem."
+            errorShow = true
+            return
+        }
+
+        let missing = armv7RequiredPaths.filter {
+            !fm.isReadableFile(atPath: sourceRoot.appendingPathComponent($0).path)
+        }
+        guard missing.isEmpty else {
+            errorInfo = "RootFS is incomplete. Missing:\n" + missing.joined(separator: "\n")
+            errorShow = true
+            return
+        }
+
+        let runtimeDirectory = armv7RootfsURL.deletingLastPathComponent()
+        let stagingURL = runtimeDirectory.appendingPathComponent("rootfs-importing", isDirectory: true)
+        do {
+            try fm.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+            if fm.fileExists(atPath: stagingURL.path) { try fm.removeItem(at: stagingURL) }
+            try fm.copyItem(at: sourceRoot, to: stagingURL)
+            if fm.fileExists(atPath: armv7RootfsURL.path) { try fm.removeItem(at: armv7RootfsURL) }
+            try fm.moveItem(at: stagingURL, to: armv7RootfsURL)
+            refreshArmv7RootfsStatus()
+            successInfo = "ARMv7 rootfs installed and validated."
+            successShow = true
+        } catch {
+            try? fm.removeItem(at: stagingURL)
+            errorInfo = "RootFS import failed: \(error.localizedDescription)"
+            errorShow = true
+        }
+    }
+
+    func removeArmv7Rootfs() {
+        do {
+            if FileManager.default.fileExists(atPath: armv7RootfsURL.path) {
+                try FileManager.default.removeItem(at: armv7RootfsURL)
+            }
+            refreshArmv7RootfsStatus()
+        } catch {
+            errorInfo = "Could not remove RootFS: \(error.localizedDescription)"
+            errorShow = true
+        }
+    }
+    #endif
+
     func openGitHub() {
         UIApplication.shared.open(URL(string: "https://github.com/LiveContainer/LiveContainer")!)
     }

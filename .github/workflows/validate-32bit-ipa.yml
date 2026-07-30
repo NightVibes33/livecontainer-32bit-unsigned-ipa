@@ -1,0 +1,154 @@
+name: Validate 32-bit IPA Compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: Direct HTTPS URL to a decrypted IPA (release asset, presigned URL, or raw file URL)
+        required: true
+        type: string
+      expected_sha256:
+        description: Optional expected IPA SHA-256
+        required: false
+        type: string
+      rootfs_url:
+        description: Optional HTTPS URL to a .zip or .tar archive containing the ARMv7 iOS rootfs
+        required: false
+        type: string
+      livecontainer_ipa_url:
+        description: Optional LiveContainer IPA URL; blank uses this repo's unsigned-latest release
+        required: false
+        type: string
+      strict_rootfs:
+        description: Fail when an absolute guest dependency is absent from the supplied rootfs
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Static and packaged-runtime compatibility gate
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      GUEST_IPA: input/guest.ipa
+      LC_IPA: input/LiveContainer-unsigned.ipa
+      REPORT_DIR: reports
+    steps:
+      - name: Checkout validator branch
+        uses: actions/checkout@v6
+
+      - name: Download guest IPA
+        env:
+          URL: ${{ inputs.ipa_url }}
+          DOWNLOAD_TOKEN: ${{ secrets.IPA_DOWNLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p input "$REPORT_DIR"
+          if [ -n "${DOWNLOAD_TOKEN:-}" ]; then
+            curl --fail --location --retry 3 --header "Authorization: Bearer $DOWNLOAD_TOKEN" "$URL" --output "$GUEST_IPA"
+          else
+            curl --fail --location --retry 3 "$URL" --output "$GUEST_IPA"
+          fi
+          test -s "$GUEST_IPA"
+          file "$GUEST_IPA"
+          shasum -a 256 "$GUEST_IPA"
+
+      - name: Download LiveContainer IPA under test
+        env:
+          CUSTOM_URL: ${{ inputs.livecontainer_ipa_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CUSTOM_URL" ]; then
+            curl --fail --location --retry 3 "$CUSTOM_URL" --output "$LC_IPA"
+          else
+            gh release download unsigned-latest --repo "$GITHUB_REPOSITORY" --pattern 'LiveContainer-unsigned.ipa' --dir input
+          fi
+          test -s "$LC_IPA"
+          shasum -a 256 "$LC_IPA"
+
+      - name: Validate guest against packaged LiveContainer
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          args=("$GUEST_IPA" --livecontainer-ipa "$LC_IPA" --output "$REPORT_DIR/compat32-report.json")
+          if [ -n "$EXPECTED_SHA" ]; then
+            args+=(--expected-sha256 "$EXPECTED_SHA")
+          fi
+          python3 tools/compat32-report.py "${args[@]}"
+
+      - name: Download and inspect ARMv7 rootfs
+        if: ${{ inputs.rootfs_url != '' }}
+        env:
+          ROOTFS_URL: ${{ inputs.rootfs_url }}
+          STRICT: ${{ inputs.strict_rootfs }}
+        run: |
+          set -euo pipefail
+          mkdir -p rootfs-archive rootfs
+          archive=rootfs-archive/rootfs.download
+          curl --fail --location --retry 3 "$ROOTFS_URL" --output "$archive"
+          kind=$(file -b "$archive")
+          case "$kind" in
+            *Zip*) ditto -x -k "$archive" rootfs ;;
+            *gzip*|*tar*) tar -xf "$archive" -C rootfs ;;
+            *) echo "Unsupported rootfs archive: $kind" >&2; exit 1 ;;
+          esac
+          root=$(find rootfs -type f -path '*/usr/lib/dyld' -print -quit | sed 's#/usr/lib/dyld$##')
+          if [ -z "$root" ]; then
+            echo 'rootfs archive does not contain usr/lib/dyld' >&2
+            exit 1
+          fi
+          set +e
+          python3 tools/check-armv7-rootfs.py "$REPORT_DIR/compat32-report.json" "$root" --output "$REPORT_DIR/rootfs-compat.json"
+          status=$?
+          set -e
+          if [ "$STRICT" = true ] && [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+      - name: Write human-readable summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          out = Path('reports/summary.md')
+          if not Path('reports/compat32-report.json').exists():
+              out.write_text('# 32-bit IPA compatibility\n\nThe compatibility report was not produced.\n')
+              raise SystemExit
+          r = json.loads(Path('reports/compat32-report.json').read_text())
+          g = r['guest']
+          lines = [
+              '# 32-bit IPA compatibility', '',
+              f"**Result:** {r['result'].upper()}",
+              f"**Bundle:** `{g.get('bundleIdentifier')}`",
+              f"**Executable:** `{g.get('executable')}`",
+              f"**ARMv7:** `{g.get('armv7')}`",
+              f"**ARM64:** `{g.get('arm64')}`",
+              f"**Decrypted:** `{g.get('decrypted')}`", '',
+              '## Failures',
+          ]
+          lines += [f'- {x}' for x in r.get('failures', [])] or ['- None']
+          lines += ['', '## Warnings']
+          lines += [f'- {x}' for x in r.get('warnings', [])] or ['- None']
+          lines += ['', '## Physical-device proof still required']
+          lines += [f'- {x}' for x in r.get('deviceProofStillRequired', [])]
+          lines += ['', '> A hosted macOS runner cannot execute an unsigned iOS IPA or prove UIKit, graphics, touch, audio, or save behavior on a 64-bit iOS device.']
+          out.write_text('\n'.join(lines) + '\n')
+          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write(out.read_text())
+          PY
+
+      - name: Upload reports and tested inputs metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat32-validation-${{ github.run_number }}
+          path: |
+            reports/
+          if-no-files-found: warn

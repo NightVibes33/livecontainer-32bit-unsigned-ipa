@@ -31,7 +31,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Checkout LiveExec32
+      - name: Checkout LiveExec32 resource bundle
         uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
@@ -43,7 +43,7 @@ jobs:
           brew install ldid
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
 
-      - name: Build bundled LiveExec32
+      - name: Build bundled LiveExec32 and no-JIT plugin
         env:
           THEOS: ${{ runner.temp }}/theos
         run: |
@@ -63,8 +63,45 @@ jobs:
             install_name_tool -change libdynarmic.dylib '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
             install_name_tool -change '@rpath/libdynarmic.dylib' '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
           fi
+
+          RUNTIME_SOURCES=(
+            runtime/LC32PluginMain.cpp
+            runtime/LC32Interpreter.cpp
+            runtime/LC32MachOLoader.cpp
+            runtime/LC32DarwinSyscalls.cpp
+            runtime/LC32ProcessStack.cpp
+            runtime/LC32BootSession.cpp
+            runtime/LC32DyldHandoff.cpp
+            runtime/LC32MachODependencies.cpp
+            runtime/LC32GuestPathResolver.cpp
+            runtime/LC32DependencyAudit.cpp
+            runtime/LC32DependencyLoadPlan.cpp
+            runtime/LC32DependencyMapper.cpp
+            runtime/LC32DyldImageSet.cpp
+            runtime/LC32DyldBootSession.cpp
+          )
+          xcrun --sdk iphoneos clang++ \
+            -std=c++17 \
+            -arch arm64 \
+            -miphoneos-version-min=16.0 \
+            -dynamiclib \
+            -fvisibility=hidden \
+            -fvisibility-inlines-hidden \
+            -I runtime \
+            "${RUNTIME_SOURCES[@]}" \
+            -Wl,-install_name,@loader_path/LiveExec32Plugin.dylib \
+            -Wl,-dead_strip \
+            -o "$LIVEEXEC_APP/LiveExec32Plugin.dylib"
+
           test -f "$LIVEEXEC_APP/Info.plist"
           test -f "$LIVEEXEC_APP/LiveExec32"
+          test -f "$LIVEEXEC_APP/LiveExec32Plugin.dylib"
+          file "$LIVEEXEC_APP/LiveExec32Plugin.dylib" | grep -q 'dynamically linked shared library'
+          nm -gU "$LIVEEXEC_APP/LiveExec32Plugin.dylib" | grep -q '_LC32Main$'
+          if strings "$LIVEEXEC_APP/LiveExec32Plugin.dylib" | grep -q 'JIT is required to run 32-bit apps'; then
+            echo 'obsolete JIT gate leaked into LC32 plugin' >&2
+            exit 1
+          fi
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
 
       - name: Set CI bundle build number
@@ -107,6 +144,7 @@ jobs:
           ditto "$LIVEEXEC_APP" "$APP_PATH/LiveExec32.app"
           test -f "$APP_PATH/LiveExec32.app/Info.plist"
           test -f "$APP_PATH/LiveExec32.app/LiveExec32"
+          test -f "$APP_PATH/LiveExec32.app/LiveExec32Plugin.dylib"
           BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")
           make_entitlements() {
             python3 - "$1" "$2" "$3" <<'PY'
@@ -167,24 +205,31 @@ jobs:
           set -eu
           test -f "$OUTPUT_IPA"
           unzip -q "$OUTPUT_IPA" -d ipa-check
-          test -d ipa-check/Payload/LiveContainer.app
-          test -f ipa-check/Payload/LiveContainer.app/Info.plist
-          test -d ipa-check/Payload/LiveContainer.app/LiveExec32.app
-          test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/Info.plist
-          test -f ipa-check/Payload/LiveContainer.app/LiveExec32.app/LiveExec32
-          test -d ipa-check/Payload/LiveContainer.app/_CodeSignature
-          test ! -e ipa-check/Payload/LiveContainer.app/embedded.mobileprovision
-          test -d ipa-check/Payload/LiveContainer.app/PlugIns/ShareExtension.appex
-          codesign -d --entitlements :- ipa-check/Payload/LiveContainer.app > ipa-check-entitlements.plist
+          APP=ipa-check/Payload/LiveContainer.app
+          test -d "$APP"
+          test -f "$APP/Info.plist"
+          test -d "$APP/LiveExec32.app"
+          test -f "$APP/LiveExec32.app/Info.plist"
+          test -f "$APP/LiveExec32.app/LiveExec32"
+          test -f "$APP/LiveExec32.app/LiveExec32Plugin.dylib"
+          file "$APP/LiveExec32.app/LiveExec32Plugin.dylib" | grep -q 'dynamically linked shared library'
+          nm -gU "$APP/LiveExec32.app/LiveExec32Plugin.dylib" | grep -q '_LC32Main$'
+          codesign --verify --strict "$APP/LiveExec32.app/LiveExec32Plugin.dylib"
+          test -d "$APP/_CodeSignature"
+          test ! -e "$APP/embedded.mobileprovision"
+          test -d "$APP/PlugIns/ShareExtension.appex"
+          codesign -d --entitlements :- "$APP" > ipa-check-entitlements.plist
           grep -q 'group.com.SideStore.SideStore' ipa-check-entitlements.plist
           grep -q 'group.com.rileytestut.AltStore' ipa-check-entitlements.plist
-          if ! grep -R -a -q 'Rerouting 32-bit guest dlopen' ipa-check/Payload/LiveContainer.app; then
-            echo "missing ARMv7 dlopen reroute marker in packaged IPA" >&2
+          grep -R -a -q 'LC32Main' "$APP"
+          grep -R -a -q 'LC32_GUEST_DYLD' "$APP"
+          if grep -R -a -q 'JIT is required to run 32-bit apps through LiveExec32' "$APP"; then
+            echo 'packaged IPA still contains obsolete 32-bit JIT gate' >&2
             exit 1
           fi
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' ipa-check/Payload/LiveContainer.app/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
@@ -203,7 +248,7 @@ jobs:
           gh release create unsigned-latest "$OUTPUT_IPA" \
             --target "$GITHUB_SHA" \
             --title "Latest unsigned IPA" \
-            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes bundled LiveExec32.app." \
+            --notes "Unsigned real-device IPA built from $GITHUB_SHA. Includes loadable no-JIT LC32 runtime plugin." \
             --latest
 
       - name: Update AltStore source

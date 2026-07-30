@@ -51,12 +51,14 @@ static NSBundle *LCBundleFor32BitLayer(NSString *layerPath, NSString **executabl
     if(!bundle) {
         return nil;
     }
-    NSString *execPath = bundle.executablePath;
-    if(!execPath || ![NSFileManager.defaultManager fileExistsAtPath:execPath]) {
+    // LiveExec32.app remains the signed resource container, but the host must
+    // dlopen a MH_DYLIB image rather than the app's MH_EXECUTE entry point.
+    NSString *pluginPath = [layerPath stringByAppendingPathComponent:@"LiveExec32Plugin.dylib"];
+    if(![NSFileManager.defaultManager fileExistsAtPath:pluginPath]) {
         return nil;
     }
     if(executablePath) {
-        *executablePath = execPath;
+        *executablePath = pluginPath;
     }
     return bundle;
 }
@@ -90,8 +92,16 @@ static NSString *LCResolve32BitLayerPath(NSString *docPath, NSString *selected32
     NSError *copyError = nil;
     NSString *destinationParent = selected32BitLayerPath.stringByDeletingLastPathComponent;
     [NSFileManager.defaultManager createDirectoryAtPath:destinationParent withIntermediateDirectories:YES attributes:nil error:nil];
-    if(![NSFileManager.defaultManager fileExistsAtPath:selected32BitLayerPath] &&
-       [NSFileManager.defaultManager copyItemAtPath:bundled32BitLayerPath toPath:selected32BitLayerPath error:&copyError] &&
+    // A previous build may have copied the old MH_EXECUTE-only layer. Remove it
+    // so the new loadable plugin is not shadowed by stale Documents content.
+    if([NSFileManager.defaultManager fileExistsAtPath:selected32BitLayerPath]) {
+        [NSFileManager.defaultManager removeItemAtPath:selected32BitLayerPath error:&copyError];
+        if(copyError) {
+            NSLog(@"[LCBootstrap] Failed to remove stale LiveExec32.app: %@", copyError);
+            copyError = nil;
+        }
+    }
+    if([NSFileManager.defaultManager copyItemAtPath:bundled32BitLayerPath toPath:selected32BitLayerPath error:&copyError] &&
        LCBundleFor32BitLayer(selected32BitLayerPath, executablePath)) {
         return selected32BitLayerPath;
     }
@@ -674,16 +684,10 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         is32bit = true;
     }
     if(is32bit) {
-        if (!isJitEnabled) {
-            isJitEnabled = waitForJITEnabled(80, 1000 * 100);
-            if(isJitEnabled) {
-                init_bypassDyldLibValidation();
-            }
-        }
-        if (!isJitEnabled) {
-            return @"JIT is required to run 32-bit apps through LiveExec32.";
-        }
-        
+        // LiveExec32 now executes ARMv7 through the bundled no-JIT interpreter.
+        // Do not block 32-bit guests on host JIT availability.
+        NSLog(@"[LCBootstrap] Launching 32-bit guest through no-JIT LiveExec32 runtime.");
+
         NSString *selected32BitLayerExecPath = nil;
         NSString *resolveError = nil;
         NSString *selected32BitLayerPath = LCResolve32BitLayerPath(docPath, [lcUserDefaults stringForKey:@"selected32BitLayer"], &selected32BitLayerExecPath, &resolveError);
@@ -694,6 +698,21 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
             return appError;
         }
         NSLog(@"[LCBootstrap] Using 32-bit translation layer at %@", selected32BitLayerPath);
+
+        NSString *runtimeRoot = [docPath stringByAppendingPathComponent:@"LiveExec32Runtime/rootfs"];
+        NSString *runtimeLogs = [docPath stringByAppendingPathComponent:@"LiveExec32Runtime/Logs"];
+        [fm createDirectoryAtPath:runtimeLogs withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *runtimeLog = [runtimeLogs stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%@-boot.jsonl", appBundle.bundleIdentifier ?: @"unknown"]];
+        NSString *runtimeDyld = [runtimeRoot stringByAppendingPathComponent:@"usr/lib/dyld"];
+        setenv("LC32_GUEST_EXECUTABLE", appBundle.executablePath.fileSystemRepresentation, 1);
+        setenv("LC32_GUEST_BUNDLE", appBundle.bundlePath.fileSystemRepresentation, 1);
+        setenv("LC32_GUEST_HOME", newHomePath.fileSystemRepresentation, 1);
+        setenv("LC32_GUEST_ROOTFS", runtimeRoot.fileSystemRepresentation, 1);
+        setenv("LC32_GUEST_DYLD", runtimeDyld.fileSystemRepresentation, 1);
+        setenv("LC32_LOG_PATH", runtimeLog.fileSystemRepresentation, 1);
+        setenv("LC32_GUEST_BUNDLE_ID", (appBundle.bundleIdentifier ?: @"unknown").UTF8String, 1);
+        setenv("LC32_LAUNCH_SCHEMA", "2", 1);
         appExecPath = strdup(selected32BitLayerExecPath.UTF8String);
     }
 #endif
@@ -769,10 +788,24 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     NSLog(@"[LCBootstrap] loaded bundle");
 
-    // Find main()
+    // Native guests use LC_MAIN. The interpreted 32-bit layer is a dylib with
+    // one explicit C entry point so dyld never attempts to load a main executable.
+#if is32BitSupported
+    if(is32bit) {
+        dlerror();
+        appMain = (int (*)(int, char**))dlsym(appHandle, "LC32Main");
+        const char *entryError = dlerror();
+        if(entryError) {
+            NSLog(@"[LCBootstrap] LC32Main lookup failed: %s", entryError);
+        }
+    } else {
+        appMain = getAppEntryPoint(appHandle);
+    }
+#else
     appMain = getAppEntryPoint(appHandle);
+#endif
     if (!appMain) {
-        appError = @"Could not find the main entry point";
+        appError = is32bit ? @"LiveExec32Plugin.dylib does not export LC32Main" : @"Could not find the main entry point";
         NSLog(@"[LCBootstrap] %@", appError);
         *path = oldPath;
         return appError;
@@ -790,6 +823,15 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     } else {
         char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
         ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32);
+    }
+#endif
+#if is32BitSupported
+    if(is32bit && ret != 0) {
+        const char* (*lastErrorFn)(void) = (const char* (*)(void))dlsym(appHandle, "LC32LastError");
+        const char* runtimeDetail = lastErrorFn ? lastErrorFn() : NULL;
+        if(runtimeDetail && runtimeDetail[0]) {
+            return [NSString stringWithFormat:@"LiveExec32 stopped with code %d: %s", ret, runtimeDetail];
+        }
     }
 #endif
     return [NSString stringWithFormat:@"App returned from its main function with code %d.", ret];
