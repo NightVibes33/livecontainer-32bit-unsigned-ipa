@@ -58,6 +58,9 @@ private:
     bool resolveGuestPath(const std::string& guestPath,
                           std::string& hostPath,
                           int& errorNumber) const;
+    bool resolveGuestPathNoFollow(const std::string& guestPath,
+                                   std::string& hostPath,
+                                   int& errorNumber) const;
     int allocateGuestFd(int hostFd, uint32_t openFlags, uint32_t descriptorFlags);
 
     SyscallMemory memory_;

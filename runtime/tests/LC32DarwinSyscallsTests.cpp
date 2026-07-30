@@ -42,6 +42,8 @@ int main() {
     constexpr uint32_t kStatAddress = 0x1000u;
     constexpr uint32_t kFstatAddress = 0x1200u;
     constexpr uint32_t kMincoreAddress = 0x1400u;
+    constexpr uint32_t kLinkReadAddress = 0x1800u;
+    constexpr uint32_t kLinkStatAddress = 0x1c00u;
     constexpr uint32_t kSysctlNameAddress = 0x1600u;
     constexpr uint32_t kSysctlLengthAddress = 0x1640u;
     constexpr uint32_t kSysctlOutputAddress = 0x1680u;
@@ -152,6 +154,8 @@ int main() {
         file.write(payload.data(), static_cast<std::streamsize>(payload.size()));
     }
     assert(::symlink("/etc/passwd", (root / "usr/lib/escape").c_str()) == 0);
+    assert(::symlink("libA.dylib", (root / "usr/lib/libAlias.dylib").c_str()) == 0);
+    assert(::symlink("/etc", (root / "usr/outside").c_str()) == 0);
 
     DarwinSyscalls rooted(syscallMemory, root.string());
 
@@ -194,6 +198,101 @@ int main() {
     assert((mode & 0170000u) == 0100000u);
     assert(size == static_cast<int64_t>(payload.size()));
 
+    const std::string aliasTarget = "libA.dylib";
+    putCString(kPathAddress, "/usr/lib/libAlias.dylib");
+    std::memset(lowMemory.data() + kLinkReadAddress, 0x5a, 32u);
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 32u;
+    const auto aliasReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(aliasReadlink.handled && aliasReadlink.errorNumber == 0);
+    assert(aliasReadlink.returnValue == static_cast<int32_t>(aliasTarget.size()));
+    assert(std::memcmp(lowMemory.data() + kLinkReadAddress,
+                       aliasTarget.data(),
+                       aliasTarget.size()) == 0);
+    assert(lowMemory[kLinkReadAddress + aliasTarget.size()] == 0x5au);
+
+    std::memset(lowMemory.data() + kLinkReadAddress, 0x5a, 8u);
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 4u;
+    const auto shortReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(shortReadlink.handled && shortReadlink.errorNumber == 0);
+    assert(shortReadlink.returnValue == 4);
+    assert(std::memcmp(lowMemory.data() + kLinkReadAddress, "libA", 4u) == 0);
+    assert(lowMemory[kLinkReadAddress + 4u] == 0x5au);
+
+    std::memset(lowMemory.data() + kLinkStatAddress,
+                0x5a,
+                kGuestStat64Size + 1u);
+    state = {};
+    state.r[12] = 340;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkStatAddress;
+    const auto aliasLstat = rooted.dispatch(state, 0x80u, false);
+    assert(aliasLstat.handled && aliasLstat.errorNumber == 0);
+    std::memcpy(&mode,
+                lowMemory.data() + kLinkStatAddress + kGuestStat64ModeOffset,
+                sizeof(mode));
+    std::memcpy(&size,
+                lowMemory.data() + kLinkStatAddress + kGuestStat64SizeOffset,
+                sizeof(size));
+    assert((mode & 0170000u) == 0120000u);
+    assert(size == static_cast<int64_t>(aliasTarget.size()));
+    assert(lowMemory[kLinkStatAddress + kGuestStat64Size] == 0x5au);
+
+    putCString(kPathAddress, "/usr/lib/libA.dylib");
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 32u;
+    const auto regularReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(regularReadlink.handled && regularReadlink.errorNumber == EINVAL);
+
+    putCString(kPathAddress, "/usr/lib/escape");
+    std::memset(lowMemory.data() + kLinkReadAddress, 0x5a, 32u);
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 32u;
+    const auto finalEscapeReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(finalEscapeReadlink.handled && finalEscapeReadlink.errorNumber == 0);
+    assert(std::string(reinterpret_cast<char*>(lowMemory.data() + kLinkReadAddress),
+                       static_cast<size_t>(finalEscapeReadlink.returnValue)) ==
+           "/etc/passwd");
+
+    state = {};
+    state.r[12] = 340;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkStatAddress;
+    const auto finalEscapeLstat = rooted.dispatch(state, 0x80u, false);
+    assert(finalEscapeLstat.handled && finalEscapeLstat.errorNumber == 0);
+
+    putCString(kPathAddress, "/usr/outside/passwd");
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 32u;
+    const auto parentEscapeReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(parentEscapeReadlink.handled && parentEscapeReadlink.errorNumber == EACCES);
+
+    putCString(kPathAddress, "/usr/lib/libAlias.dylib");
+    state = {};
+    state.r[12] = 58;
+    state.r[0] = kPathAddress;
+    state.r[1] = kLinkReadAddress;
+    state.r[2] = 0u;
+    const auto zeroReadlink = rooted.dispatch(state, 0x80u, false);
+    assert(zeroReadlink.handled && zeroReadlink.errorNumber == EINVAL);
+
+    putCString(kPathAddress, "/usr/lib/libA.dylib");
     state = {};
     state.r[12] = 5;
     state.r[0] = kPathAddress;

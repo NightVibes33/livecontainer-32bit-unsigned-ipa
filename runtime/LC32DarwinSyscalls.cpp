@@ -302,6 +302,85 @@ bool DarwinSyscalls::resolveGuestPath(const std::string& guestPath,
     return true;
 }
 
+
+bool DarwinSyscalls::resolveGuestPathNoFollow(const std::string& guestPath,
+                                               std::string& hostPath,
+                                               int& errorNumber) const {
+    hostPath.clear();
+    errorNumber = 0;
+    if (guestRoot_.empty()) {
+        errorNumber = ENOENT;
+        return false;
+    }
+    if (guestPath.empty() || guestPath.front() != '/') {
+        errorNumber = EINVAL;
+        return false;
+    }
+
+    std::vector<std::string> components;
+    std::size_t start = 1;
+    while (start <= guestPath.size()) {
+        const std::size_t end = guestPath.find('/', start);
+        const std::string component = guestPath.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if (component.empty() || component == ".") {
+            // Ignore repeated separators and current-directory components.
+        } else if (component == "..") {
+            if (components.empty()) {
+                errorNumber = EACCES;
+                return false;
+            }
+            components.pop_back();
+        } else {
+            components.push_back(component);
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+
+    char resolvedRoot[PATH_MAX]{};
+    if (!::realpath(guestRoot_.c_str(), resolvedRoot)) {
+        errorNumber = errno ? errno : ENOENT;
+        return false;
+    }
+    std::string root(resolvedRoot);
+    while (root.size() > 1 && root.back() == '/') root.pop_back();
+    if (components.empty()) {
+        hostPath = root;
+        return true;
+    }
+
+    std::string parentCandidate = guestRoot_;
+    while (parentCandidate.size() > 1 && parentCandidate.back() == '/') {
+        parentCandidate.pop_back();
+    }
+    for (std::size_t index = 0; index + 1u < components.size(); ++index) {
+        parentCandidate.push_back('/');
+        parentCandidate += components[index];
+    }
+
+    char resolvedParent[PATH_MAX]{};
+    if (!::realpath(parentCandidate.c_str(), resolvedParent)) {
+        errorNumber = errno ? errno : ENOENT;
+        return false;
+    }
+    std::string parent(resolvedParent);
+    while (parent.size() > 1 && parent.back() == '/') parent.pop_back();
+    const bool withinRoot = parent == root ||
+                            (parent.size() > root.size() &&
+                             parent.compare(0, root.size(), root) == 0 &&
+                             parent[root.size()] == '/');
+    if (!withinRoot) {
+        errorNumber = EACCES;
+        return false;
+    }
+
+    hostPath = std::move(parent);
+    if (hostPath.size() != 1 || hostPath.front() != '/') hostPath.push_back('/');
+    hostPath += components.back();
+    return true;
+}
+
 int DarwinSyscalls::allocateGuestFd(int hostFd,
                                     uint32_t openFlags,
                                     uint32_t descriptorFlags) {
@@ -460,6 +539,38 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             return ok(number, static_cast<int32_t>(::getegid()), "getegid");
         case 47:
             return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 58: {
+            std::string path;
+            if (!readCString(state.r[0], path)) {
+                return fail(number, EFAULT, "readlink path");
+            }
+            const uint32_t bufferAddress = state.r[1];
+            const size_t count = state.r[2];
+            if (count == 0 || count > kMaximumTransfer) {
+                return fail(number, EINVAL, "readlink length");
+            }
+            std::string hostPath;
+            int pathError = 0;
+            if (!resolveGuestPathNoFollow(path, hostPath, pathError)) {
+                return fail(number,
+                            pathError ? pathError : ENOENT,
+                            "readlink guest path");
+            }
+            std::vector<char> target(count);
+            ssize_t bytes = -1;
+            do {
+                bytes = ::readlink(hostPath.c_str(), target.data(), target.size());
+            } while (bytes < 0 && errno == EINTR);
+            if (bytes < 0) return fail(number, errno, "readlink host call");
+            if (bytes > 0 &&
+                (!memory_.write ||
+                 !memory_.write(bufferAddress,
+                                target.data(),
+                                static_cast<size_t>(bytes)))) {
+                return fail(number, EFAULT, "readlink guest write");
+            }
+            return ok(number, static_cast<int32_t>(bytes), "readlink");
+        }
         case 65: {
             const uint32_t address = state.r[0];
             const uint32_t length = state.r[1];
@@ -1012,6 +1123,29 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EFAULT, "sysctl output write");
             }
             return ok(number, 0, "sysctl");
+        }
+        case 340: {
+            std::string path;
+            if (!readCString(state.r[0], path)) {
+                return fail(number, EFAULT, "lstat64 path");
+            }
+            std::string hostPath;
+            int pathError = 0;
+            if (!resolveGuestPathNoFollow(path, hostPath, pathError)) {
+                return fail(number,
+                            pathError ? pathError : ENOENT,
+                            "lstat64 guest path");
+            }
+            struct stat host{};
+            if (::lstat(hostPath.c_str(), &host) != 0) {
+                return fail(number, errno, "lstat64 host call");
+            }
+            const GuestStat64 guest = guestStat64(host);
+            if (!memory_.write ||
+                !memory_.write(state.r[1], &guest, sizeof(guest))) {
+                return fail(number, EFAULT, "lstat64 guest write");
+            }
+            return ok(number, 0, "lstat64");
         }
         case 338: {
             std::string path;
