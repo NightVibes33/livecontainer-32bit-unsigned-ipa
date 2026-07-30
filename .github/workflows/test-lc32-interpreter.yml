@@ -6,12 +6,35 @@ on:
     paths:
       - 'runtime/**'
       - 'tools/fix-lc32-interpreter-mask.py'
+      - 'tools/apply_mincore.py'
       - '.github/workflows/test-lc32-interpreter.yml'
 
 permissions:
   contents: read
 
 jobs:
+  apply-staged-mincore-patch:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply staged mincore patch
+        shell: bash
+        run: python3 tools/apply_mincore.py
+      - name: Commit staged mincore patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "runtime: add mincore support"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   no-jit-runtime-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
