@@ -83,10 +83,47 @@ bool DyldBootSession::dispatchSupervisorCall(DyldBootResult& out, const Result& 
 }
 
 DyldBootResult DyldBootSession::boot(const DyldHandoffSpec& spec, uint64_t maxSteps) {
+    return bootImpl(spec, nullptr, nullptr, maxSteps);
+}
+
+DyldBootResult DyldBootSession::bootAudited(const DyldHandoffSpec& spec,
+                                            GuestPathContext context,
+                                            const GuestPathExists& exists,
+                                            uint64_t maxSteps) {
+    return bootImpl(spec, &context, &exists, maxSteps);
+}
+
+DyldBootResult DyldBootSession::bootImpl(const DyldHandoffSpec& spec,
+                                         const GuestPathContext* auditContext,
+                                         const GuestPathExists* exists,
+                                         uint64_t maxSteps) {
     DyldBootResult out;
     regions_.clear();
     state_ = {};
     event(out, "dyld-boot-start", "preparing app and dyld images");
+
+    out.dependencies = parseArmv7MachODependencies(spec.appImage, spec.appSize);
+    if (!out.dependencies.ok) {
+        out.cpuResult = {StopReason::Halt, 0, 0, 0, out.dependencies.error};
+        event(out, "dependency-parse-failed", out.dependencies.error);
+        return out;
+    }
+
+    if (auditContext && exists) {
+        GuestPathContext context = *auditContext;
+        if (context.executablePath.empty()) context.executablePath = spec.executablePath;
+        if (context.loaderPath.empty()) context.loaderPath = spec.executablePath;
+        for (const std::string& rpath : out.dependencies.rpaths) context.rpaths.push_back(rpath);
+        out.dependencyAudit = auditGuestDependencies(out.dependencies, context, *exists);
+        event(out,
+              out.dependencyAudit.ok ? "dependency-audit-passed" : "dependency-audit-failed",
+              out.dependencyAudit.error,
+              static_cast<uint32_t>(out.dependencyAudit.missingRequired.size()));
+        if (!out.dependencyAudit.ok) {
+            out.cpuResult = {StopReason::Halt, 0, 0, 0, out.dependencyAudit.error};
+            return out;
+        }
+    }
 
     out.handoff = prepareDyldHandoff(
         spec,
