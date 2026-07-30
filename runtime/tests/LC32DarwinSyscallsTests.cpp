@@ -1,4 +1,5 @@
 #include "../LC32DarwinSyscalls.hpp"
+#include "../LC32RegionOperations.hpp"
 
 #include <cassert>
 #include <cerrno>
@@ -102,6 +103,14 @@ int main() {
         regions.push_back(
             {address, size, protection, std::vector<uint8_t>(size)});
         return true;
+    };
+    syscallMemory.unmap = [&](uint32_t address, uint32_t size) {
+        return unmapRegionRange(regions, address, size);
+    };
+    syscallMemory.protect = [&](uint32_t address,
+                                    uint32_t size,
+                                    uint32_t protection) {
+        return protectRegionRange(regions, address, size, protection);
     };
 
     DarwinSyscalls syscalls(syscallMemory);
@@ -352,6 +361,82 @@ int main() {
     state.r[13] = static_cast<uint32_t>(lowMemory.size() - 4u);
     const auto badStack = rooted.dispatch(state, 0x80u, false);
     assert(badStack.handled && badStack.errorNumber == EFAULT);
+
+    state = {};
+    state.r[12] = 74;
+    state.r[0] = anonymousAddress + 0x1000u;
+    state.r[1] = 1u;
+    state.r[2] = kProtRead | kProtExec;
+    const auto protectedPage = rooted.dispatch(state, 0x80u, false);
+    assert(protectedPage.handled && protectedPage.errorNumber == 0);
+    bool sawWritableFirstPage = false;
+    bool sawExecutableSecondPage = false;
+    for (const Region& region : regions) {
+        if (region.base == anonymousAddress && region.size == 0x1000u) {
+            sawWritableFirstPage = region.protection == (kProtRead | kProtWrite);
+        }
+        if (region.base == anonymousAddress + 0x1000u && region.size == 0x1000u) {
+            sawExecutableSecondPage = region.protection == (kProtRead | kProtExec);
+        }
+    }
+    assert(sawWritableFirstPage && sawExecutableSecondPage);
+
+    state = {};
+    state.r[12] = 74;
+    state.r[0] = anonymousAddress;
+    state.r[1] = 0x1000u;
+    state.r[2] = kProtRead | kProtWrite | kProtExec;
+    const auto writableExecutable = rooted.dispatch(state, 0x80u, false);
+    assert(writableExecutable.handled && writableExecutable.errorNumber == EPERM);
+
+    state = {};
+    state.r[12] = 74;
+    state.r[0] = anonymousAddress + 1u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kProtRead;
+    const auto unalignedProtect = rooted.dispatch(state, 0x80u, false);
+    assert(unalignedProtect.handled && unalignedProtect.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 74;
+    state.r[0] = 0x68000000u;
+    state.r[1] = 0x1000u;
+    state.r[2] = kProtRead;
+    const auto missingProtect = rooted.dispatch(state, 0x80u, false);
+    assert(missingProtect.handled && missingProtect.errorNumber == ENOMEM);
+
+    state = {};
+    state.r[12] = 73;
+    state.r[0] = anonymousAddress + 0x1000u;
+    state.r[1] = 1u;
+    const auto unmappedPage = rooted.dispatch(state, 0x80u, false);
+    assert(unmappedPage.handled && unmappedPage.errorNumber == 0);
+    uint8_t removedByte = 0;
+    assert(!syscallMemory.read(anonymousAddress + 0x1000u, &removedByte, 1));
+    assert(syscallMemory.read(anonymousAddress, &removedByte, 1));
+
+    const auto remappedPage = mmapGuest(anonymousAddress + 0x1000u,
+                                        4096u,
+                                        kProtRead | kProtWrite,
+                                        kMapPrivate | kMapAnonymous,
+                                        -1,
+                                        0);
+    assert(remappedPage.handled && remappedPage.errorNumber == 0);
+    assert(state.r[0] == anonymousAddress + 0x1000u);
+
+    state = {};
+    state.r[12] = 73;
+    state.r[0] = anonymousAddress + 1u;
+    state.r[1] = 0x1000u;
+    const auto unalignedUnmap = rooted.dispatch(state, 0x80u, false);
+    assert(unalignedUnmap.handled && unalignedUnmap.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 73;
+    state.r[0] = 0x69000000u;
+    state.r[1] = 0x1000u;
+    const auto emptyUnmap = rooted.dispatch(state, 0x80u, false);
+    assert(emptyUnmap.handled && emptyUnmap.errorNumber == 0);
 
     state = {};
     state.r[12] = 92;

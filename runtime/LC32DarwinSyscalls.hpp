@@ -14,6 +14,8 @@ struct SyscallMemory {
     std::function<bool(uint32_t, void*, size_t)> read;
     std::function<bool(uint32_t, const void*, size_t)> write;
     std::function<bool(uint32_t, uint32_t, uint32_t)> map;
+    std::function<bool(uint32_t, uint32_t)> unmap;
+    std::function<bool(uint32_t, uint32_t, uint32_t)> protect;
 };
 
 enum class TrapClass : uint8_t {

@@ -1,4 +1,5 @@
 #include "LC32BootSession.hpp"
+#include "LC32RegionOperations.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -23,6 +24,16 @@ bool BootSession::map(uint32_t address, uint32_t size, uint32_t protection) {
     r.bytes.resize(size);
     regions_.push_back(std::move(r));
     return true;
+}
+
+bool BootSession::unmap(uint32_t address, uint32_t size) {
+    return unmapRegionRange(regions_, address, size);
+}
+
+bool BootSession::protect(uint32_t address,
+                     uint32_t size,
+                     uint32_t protection) {
+    return protectRegionRange(regions_, address, size, protection);
 }
 
 bool BootSession::read(uint32_t address, void* data, std::size_t size) const {
@@ -150,6 +161,12 @@ BootResult BootSession::boot(const uint8_t* image,
         memory.write,
         [this](uint32_t address, uint32_t bytes, uint32_t protection) {
             return map(address, bytes, protection);
+        },
+        [this](uint32_t address, uint32_t bytes) {
+            return unmap(address, bytes);
+        },
+        [this](uint32_t address, uint32_t bytes, uint32_t protection) {
+            return protect(address, bytes, protection);
         }};
     Interpreter interpreter(state_, memory);
     DarwinSyscalls syscalls(syscallMemory);

@@ -404,6 +404,50 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             return ok(number, static_cast<int32_t>(::getegid()), "getegid");
         case 47:
             return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 73: {
+            const uint32_t address = state.r[0];
+            const uint32_t length = state.r[1];
+            if (length == 0 || length > kMaximumMapping ||
+                (address & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "munmap range");
+            }
+            uint32_t mappedLength = 0;
+            if (!alignPage(length, mappedLength) || mappedLength == 0 ||
+                static_cast<uint64_t>(address) + mappedLength > 0x100000000ull) {
+                return fail(number, EINVAL, "munmap aligned range");
+            }
+            if (!memory_.unmap) return fail(number, ENOSYS, "munmap callback");
+            if (!memory_.unmap(address, mappedLength)) {
+                return fail(number, EINVAL, "munmap guest range");
+            }
+            return ok(number, 0, "munmap");
+        }
+        case 74: {
+            const uint32_t address = state.r[0];
+            const uint32_t length = state.r[1];
+            const uint32_t protection = state.r[2];
+            if (length == 0 || length > kMaximumMapping ||
+                (address & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "mprotect range");
+            }
+            if ((protection & ~(kProtRead | kProtWrite | kProtExec)) != 0) {
+                return fail(number, EINVAL, "mprotect protection");
+            }
+            if ((protection & (kProtWrite | kProtExec)) ==
+                (kProtWrite | kProtExec)) {
+                return fail(number, EPERM, "mprotect W+X blocked");
+            }
+            uint32_t mappedLength = 0;
+            if (!alignPage(length, mappedLength) || mappedLength == 0 ||
+                static_cast<uint64_t>(address) + mappedLength > 0x100000000ull) {
+                return fail(number, EINVAL, "mprotect aligned range");
+            }
+            if (!memory_.protect) return fail(number, ENOSYS, "mprotect callback");
+            if (!memory_.protect(address, mappedLength, protection)) {
+                return fail(number, ENOMEM, "mprotect guest range");
+            }
+            return ok(number, 0, "mprotect");
+        }
         case 92: {
             const int guestFd = static_cast<int>(state.r[0]);
             const uint32_t command = state.r[1];

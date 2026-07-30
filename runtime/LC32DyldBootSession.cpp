@@ -1,4 +1,5 @@
 #include "LC32DyldBootSession.hpp"
+#include "LC32RegionOperations.hpp"
 
 #include <cstring>
 #include <sstream>
@@ -21,6 +22,16 @@ bool DyldBootSession::map(uint32_t address, uint32_t size, uint32_t protection) 
     r.bytes.resize(size);
     regions_.push_back(std::move(r));
     return true;
+}
+
+bool DyldBootSession::unmap(uint32_t address, uint32_t size) {
+    return unmapRegionRange(regions_, address, size);
+}
+
+bool DyldBootSession::protect(uint32_t address,
+                     uint32_t size,
+                     uint32_t protection) {
+    return protectRegionRange(regions_, address, size, protection);
 }
 
 bool DyldBootSession::read(uint32_t address, void* data, std::size_t size) const {
@@ -116,6 +127,12 @@ DyldBootResult DyldBootSession::executePrepared(DyldBootResult out,
          memory.write,
          [this](uint32_t address, uint32_t size, uint32_t protection) {
              return map(address, size, protection);
+         },
+         [this](uint32_t address, uint32_t size) {
+             return unmap(address, size);
+         },
+         [this](uint32_t address, uint32_t size, uint32_t protection) {
+             return protect(address, size, protection);
          }},
         std::move(syscallGuestRoot));
     Interpreter interpreter(state_, memory);

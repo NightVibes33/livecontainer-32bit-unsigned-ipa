@@ -46,6 +46,8 @@ private:
     std::vector<Region> regions_;
 
     bool map(uint32_t address, uint32_t size, uint32_t protection);
+    bool unmap(uint32_t address, uint32_t size);
+    bool protect(uint32_t address, uint32_t size, uint32_t protection);
     bool read(uint32_t address, void* data, std::size_t size) const;
     bool write(uint32_t address, const void* data, std::size_t size);
     void event(BootResult& out, std::string stage, std::string detail = {}, uint32_t value = 0);
