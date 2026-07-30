@@ -13,6 +13,7 @@ namespace lc32 {
 struct SyscallMemory {
     std::function<bool(uint32_t, void*, size_t)> read;
     std::function<bool(uint32_t, const void*, size_t)> write;
+    std::function<bool(uint32_t, uint32_t, uint32_t)> map;
 };
 
 enum class TrapClass : uint8_t {
@@ -61,6 +62,7 @@ private:
     std::string guestRoot_;
     std::unordered_map<int, GuestFile> guestFiles_;
     int nextGuestFd_ = 3;
+    uint32_t nextMmapAddress_ = 0x50000000u;
 };
 
 } // namespace lc32
