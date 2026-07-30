@@ -30,6 +30,10 @@ jobs:
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/tests/LC32MachOLoaderTests.cpp -o lc32-macho-loader-tests
       - name: Run ARMv7 Mach-O loader tests
         run: ./lc32-macho-loader-tests
+      - name: Build clean-room virtual runtime tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/tests/LC32VirtualRuntimeTests.cpp -o lc32-virtual-runtime-tests
+      - name: Run clean-room virtual runtime tests
+        run: ./lc32-virtual-runtime-tests
       - name: Build Darwin syscall tests
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32DarwinSyscalls.cpp runtime/tests/LC32DarwinSyscallsTests.cpp -o lc32-darwin-syscall-tests
       - name: Run Darwin syscall tests
