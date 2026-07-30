@@ -367,7 +367,8 @@
 #endif
     }
 #if is32BitSupported
-    else if(!is32bit) {
+    else {
+        // Cached architecture can be stale in either direction. Always let the executable repair it.
         is32bit = [self refreshIs32bitFromExecutable];
     }
 #endif
@@ -715,14 +716,16 @@
         return self.is32bit;
     }
     NSString *execPath = [_bundlePath stringByAppendingPathComponent:executableName];
+    __block bool foundMachOSlice = false;
     __block bool has64bitSlice = false;
     NSString *error = LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
+        foundMachOSlice = true;
         if(header->cputype == CPU_TYPE_ARM64) {
             has64bitSlice = true;
         }
     });
-    if(error) {
-        NSLog(@"[LC] Failed to refresh 32-bit state for %@: %@", execPath, error);
+    if(error || !foundMachOSlice) {
+        NSLog(@"[LC] Failed to refresh 32-bit state for %@: %@", execPath, error ?: @"no Mach-O slices found");
         return self.is32bit;
     }
     self.is32bit = !has64bitSlice;
