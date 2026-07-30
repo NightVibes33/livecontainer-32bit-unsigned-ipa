@@ -13,6 +13,11 @@
 using namespace lc32;
 
 int main() {
+    constexpr uint32_t kGuestOpenCloseExec = 0x01000000u;
+    constexpr uint32_t kFcntlGetFd = 1u;
+    constexpr uint32_t kFcntlSetFd = 2u;
+    constexpr uint32_t kFcntlGetFl = 3u;
+
     std::vector<unsigned char> memory(4096);
     SyscallMemory sm;
     sm.read = [&](uint32_t address, void* out, size_t size) {
@@ -83,14 +88,68 @@ int main() {
     };
 
     putCString(512, "/usr/lib/libA.dylib");
+
+    state = {};
+    state.r[12] = 33;
+    state.r[0] = 512;
+    state.r[1] = F_OK;
+    auto exists = rooted.dispatch(state, 0x80u, false);
+    assert(exists.handled && exists.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 33;
+    state.r[0] = 512;
+    state.r[1] = R_OK;
+    auto readable = rooted.dispatch(state, 0x80u, false);
+    assert(readable.handled && readable.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 33;
+    state.r[0] = 512;
+    state.r[1] = W_OK;
+    auto writable = rooted.dispatch(state, 0x80u, false);
+    assert(writable.handled && writable.errorNumber == EROFS);
+
     state = {};
     state.r[12] = 5;
     state.r[0] = 512;
-    state.r[1] = 0;
+    state.r[1] = kGuestOpenCloseExec;
     auto opened = rooted.dispatch(state, 0x80u, false);
     assert(opened.handled && opened.errorNumber == 0);
     const int guestFd = static_cast<int>(state.r[0]);
     assert(guestFd >= 3);
+
+    state = {};
+    state.r[12] = 92;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kFcntlGetFd;
+    auto getFd = rooted.dispatch(state, 0x80u, false);
+    assert(getFd.handled && getFd.errorNumber == 0);
+    assert(state.r[0] == 1u);
+
+    state = {};
+    state.r[12] = 92;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kFcntlGetFl;
+    auto getFl = rooted.dispatch(state, 0x80u, false);
+    assert(getFl.handled && getFl.errorNumber == 0);
+    assert(state.r[0] == kGuestOpenCloseExec);
+
+    state = {};
+    state.r[12] = 92;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kFcntlSetFd;
+    state.r[2] = 0;
+    auto setFd = rooted.dispatch(state, 0x80u, false);
+    assert(setFd.handled && setFd.errorNumber == 0);
+
+    state = {};
+    state.r[12] = 92;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kFcntlGetFd;
+    auto getFdCleared = rooted.dispatch(state, 0x80u, false);
+    assert(getFdCleared.handled && getFdCleared.errorNumber == 0);
+    assert(state.r[0] == 0u);
 
     state = {};
     state.r[12] = 3;
@@ -122,6 +181,14 @@ int main() {
     state.r[1] = 1;
     auto writeOpen = rooted.dispatch(state, 0x80u, false);
     assert(writeOpen.handled && writeOpen.errorNumber == EROFS);
+
+    putCString(512, "/missing.dylib");
+    state = {};
+    state.r[12] = 33;
+    state.r[0] = 512;
+    state.r[1] = F_OK;
+    auto missing = rooted.dispatch(state, 0x80u, false);
+    assert(missing.handled && missing.errorNumber == ENOENT);
 
     putCString(512, "/../../etc/passwd");
     state = {};
