@@ -1668,7 +1668,10 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 const int32_t token = tokenAt32();
                 auto it = notifyRegistrations_.find(token);
                 if (it == notifyRegistrations_.end()) {
-                    queueInlineReply(0, {0u, kNotifyInvalidToken});
+                    const uint32_t status = canceledNotifyTokens_.count(token) != 0u
+                                                ? kNotifyInvalidToken
+                                                : kNotifyOk;
+                    queueInlineReply(0, {0u, status});
                 } else {
                     const uint32_t pending = (!it->second.suspended && it->second.pending) ? 1u : 0u;
                     if (pending != 0u) it->second.pending = false;
@@ -1724,12 +1727,16 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                 } else {
                     nameId = nameIt->second;
                 }
+                canceledNotifyTokens_.erase(token);
                 notifyRegistrations_[token] = NotifyRegistration{name, nameId, 0u, false, false};
                 return true;
             }
-            case 1016u:
-                notifyRegistrations_.erase(tokenAt32());
+            case 1016u: {
+                const int32_t token = tokenAt32();
+                notifyRegistrations_.erase(token);
+                canceledNotifyTokens_.insert(token);
                 return true;
+            }
             case 1018u: { // get_state_3(token) -> state,nid,status
                 const int32_t token = tokenAt32();
                 auto it = notifyRegistrations_.find(token);

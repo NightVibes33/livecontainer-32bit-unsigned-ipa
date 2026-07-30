@@ -9,6 +9,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lc32 {
@@ -92,6 +93,7 @@ private:
     std::unordered_map<uint32_t, MachPort> machPorts_;
     std::unordered_map<int32_t, NotifyRegistration> notifyRegistrations_;
     std::unordered_map<std::string, uint64_t> notifyNameIds_;
+    std::unordered_set<int32_t> canceledNotifyTokens_;
     uint64_t nextNotifyNameId_ = 1u;
     uint32_t nextMachPort_ = 0x200u;
     int nextGuestFd_ = 3;
