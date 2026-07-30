@@ -43,17 +43,23 @@ public:
     bool readCString(uint32_t address, std::string& out, size_t limit = 4096) const;
 
 private:
+    struct GuestFile {
+        int hostFd = -1;
+        uint32_t openFlags = 0;
+        uint32_t descriptorFlags = 0;
+    };
+
     TrapResult dispatchUnix(CPUState& state, uint32_t number);
     TrapResult dispatchMach(CPUState& state, uint32_t number);
     void writeReturn(CPUState& state, const TrapResult& result) const;
     bool resolveGuestPath(const std::string& guestPath,
                           std::string& hostPath,
                           int& errorNumber) const;
-    int allocateGuestFd(int hostFd);
+    int allocateGuestFd(int hostFd, uint32_t openFlags, uint32_t descriptorFlags);
 
     SyscallMemory memory_;
     std::string guestRoot_;
-    std::unordered_map<int, int> guestFiles_;
+    std::unordered_map<int, GuestFile> guestFiles_;
     int nextGuestFd_ = 3;
 };
 
