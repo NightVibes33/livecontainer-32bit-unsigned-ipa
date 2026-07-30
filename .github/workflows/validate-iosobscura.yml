@@ -25,18 +25,84 @@ permissions:
   contents: read
 
 concurrency:
-  group: iosobscura-${{ github.event.inputs.offset || '0' }}-${{ github.event.inputs.limit || '25' }}
+  group: iosobscura-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
-  validate:
-    name: Validate archive batch
+  validate-push-shards:
+    if: github.event_name == 'push'
+    name: Validate archive shard ${{ matrix.offset }}-${{ matrix.end }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - offset: 0
+            limit: 25
+            end: 24
+          - offset: 25
+            limit: 25
+            end: 49
+          - offset: 50
+            limit: 25
+            end: 74
+          - offset: 75
+            limit: 25
+            end: 99
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate IPA shard
+        run: |
+          python3 tools/validate_iosobscura_batch.py \
+            --offset '${{ matrix.offset }}' \
+            --limit '${{ matrix.limit }}' \
+            --max-file-mib '750' \
+            --output validation-results.json
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f validation-results.json ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          data = json.loads(Path('validation-results.json').read_text())
+          print('# iOSObscura validation shard')
+          print()
+          print(f"- Archive IPA files: {data['total_ipa_files']}")
+          print(f"- Offset: {data['offset']}")
+          print(f"- Processed: {data['processed']}")
+          print(f"- Validated: {data['validated']}")
+          print(f"- Failed: {data['failed']}")
+          print(f"- ARMv7 candidates: {data['armv7_candidates']}")
+          print(f"- ARM64-native packages: {data['arm64_native']}")
+          PY
+          else
+            echo '# iOSObscura validation shard' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No result file was produced.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iosobscura-validation-${{ matrix.offset }}-${{ matrix.limit }}
+          path: validation-results.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  validate-manual:
+    if: github.event_name == 'workflow_dispatch'
+    name: Validate manual archive batch
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      BATCH_OFFSET: ${{ github.event.inputs.offset || '0' }}
-      BATCH_LIMIT: ${{ github.event.inputs.limit || '25' }}
-      MAX_FILE_MIB: ${{ github.event.inputs.max_file_mib || '750' }}
+      BATCH_OFFSET: ${{ inputs.offset }}
+      BATCH_LIMIT: ${{ inputs.limit }}
+      MAX_FILE_MIB: ${{ inputs.max_file_mib }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -59,37 +125,6 @@ jobs:
             --limit "$BATCH_LIMIT" \
             --max-file-mib "$MAX_FILE_MIB" \
             --output validation-results.json
-
-      - name: Write job summary
-        if: always()
-        run: |
-          if [ -f validation-results.json ]; then
-            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-          data = json.loads(Path('validation-results.json').read_text())
-          print('# iOSObscura validation batch')
-          print()
-          print(f"- Archive IPA files: {data['total_ipa_files']}")
-          print(f"- Offset: {data['offset']}")
-          print(f"- Processed: {data['processed']}")
-          print(f"- Validated: {data['validated']}")
-          print(f"- Failed: {data['failed']}")
-          print(f"- ARMv7 candidates: {data['armv7_candidates']}")
-          print(f"- ARM64-native packages: {data['arm64_native']}")
-          print()
-          print('| Index | Status | Architectures | Bundle ID | Archive path |')
-          print('|---:|---|---|---|---|')
-          for row in data['results']:
-              arches = ', '.join(row.get('architectures', [])) or '-'
-              bundle = row.get('bundle_id') or '-'
-              name = row['archive_name'].replace('|', '\\|')
-              print(f"| {row['archive_index']} | {row['status']} | {arches} | {bundle} | `{name}` |")
-          PY
-          else
-            echo '# iOSObscura validation batch' >> "$GITHUB_STEP_SUMMARY"
-            echo 'No result file was produced.' >> "$GITHUB_STEP_SUMMARY"
-          fi
 
       - name: Upload validation report
         if: always()
