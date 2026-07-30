@@ -49,11 +49,16 @@ bool BootSession::write(uint32_t address, const void* data, std::size_t size) {
     return false;
 }
 
-void BootSession::event(BootResult& out, std::string stage, std::string detail, uint32_t value) {
+void BootSession::event(BootResult& out,
+                        std::string stage,
+                        std::string detail,
+                        uint32_t value) {
     out.events.push_back({std::move(stage), std::move(detail), state_.r[15], value});
 }
 
-bool BootSession::dispatchSupervisorCall(BootResult& out, const Result& stop, DarwinSyscalls& syscalls) {
+bool BootSession::dispatchSupervisorCall(BootResult& out,
+                                         const Result& stop,
+                                         DarwinSyscalls& syscalls) {
     uint32_t immediate = 0;
     uint32_t width = 0;
     if (!state_.thumb() && (stop.instruction & 0x0f000000u) == 0x0f000000u) {
@@ -68,9 +73,14 @@ bool BootSession::dispatchSupervisorCall(BootResult& out, const Result& stop, Da
 
     TrapResult trap = syscalls.dispatch(state_, immediate, state_.thumb());
     std::ostringstream detail;
-    detail << (trap.trapClass == TrapClass::Mach ? "mach" : trap.trapClass == TrapClass::Unix ? "unix" : "unknown")
+    detail << (trap.trapClass == TrapClass::Mach
+                   ? "mach"
+                   : trap.trapClass == TrapClass::Unix ? "unix" : "unknown")
            << ':' << trap.number << ':' << trap.detail;
-    event(out, trap.handled ? "syscall-handled" : "syscall-unsupported", detail.str(), trap.number);
+    event(out,
+          trap.handled ? "syscall-handled" : "syscall-unsupported",
+          detail.str(),
+          trap.number);
     if (!trap.handled) {
         out.cpuResult = stop;
         out.cpuResult.detail = detail.str();
@@ -80,13 +90,16 @@ bool BootSession::dispatchSupervisorCall(BootResult& out, const Result& stop, Da
     if (trap.shouldStop) {
         out.exited = true;
         out.exitCode = trap.returnValue;
-        out.cpuResult = {StopReason::Halt, state_.r[15], stop.instruction, stop.steps, detail.str()};
+        out.cpuResult = {
+            StopReason::Halt, state_.r[15], stop.instruction, stop.steps, detail.str()};
         return true;
     }
     return true;
 }
 
-BootResult BootSession::boot(const uint8_t* image, std::size_t size, uint64_t maxSteps) {
+BootResult BootSession::boot(const uint8_t* image,
+                             std::size_t size,
+                             uint64_t maxSteps) {
     BootResult out;
     regions_.clear();
     state_ = {};
@@ -95,8 +108,12 @@ BootResult BootSession::boot(const uint8_t* image, std::size_t size, uint64_t ma
     out.image = loadArmv7MachO(
         image,
         size,
-        [this](uint32_t address, uint32_t bytes, uint32_t protection) { return map(address, bytes, protection); },
-        [this](uint32_t address, const void* data, std::size_t bytes) { return write(address, data, bytes); });
+        [this](uint32_t address, uint32_t bytes, uint32_t protection) {
+            return map(address, bytes, protection);
+        },
+        [this](uint32_t address, const void* data, std::size_t bytes) {
+            return write(address, data, bytes);
+        });
     if (!out.image.ok) {
         event(out, "macho-load-failed", out.image.error);
         out.cpuResult = {StopReason::Halt, 0, 0, 0, out.image.error};
@@ -112,7 +129,8 @@ BootResult BootSession::boot(const uint8_t* image, std::size_t size, uint64_t ma
         constexpr uint32_t stackBase = 0x70000000u;
         constexpr uint32_t stackSize = 1024u * 1024u;
         if (!map(stackBase, stackSize, 3)) {
-            out.cpuResult = {StopReason::MemoryFault, state_.r[15], 0, 0, "stack mapping failed"};
+            out.cpuResult = {
+                StopReason::MemoryFault, state_.r[15], 0, 0, "stack mapping failed"};
             event(out, "stack-map-failed");
             return out;
         }
@@ -121,16 +139,26 @@ BootResult BootSession::boot(const uint8_t* image, std::size_t size, uint64_t ma
     event(out, "macho-loaded", "entry point ready", state_.r[15]);
 
     Memory memory{
-        [this](uint32_t address, void* data, size_t bytes) { return read(address, data, bytes); },
-        [this](uint32_t address, const void* data, size_t bytes) { return write(address, data, bytes); }};
-    SyscallMemory syscallMemory{memory.read, memory.write};
+        [this](uint32_t address, void* data, size_t bytes) {
+            return read(address, data, bytes);
+        },
+        [this](uint32_t address, const void* data, size_t bytes) {
+            return write(address, data, bytes);
+        }};
+    SyscallMemory syscallMemory{
+        memory.read,
+        memory.write,
+        [this](uint32_t address, uint32_t bytes, uint32_t protection) {
+            return map(address, bytes, protection);
+        }};
     Interpreter interpreter(state_, memory);
     DarwinSyscalls syscalls(syscallMemory);
 
     for (uint64_t i = 0; i < maxSteps; ++i) {
         Result step = interpreter.step();
         if (step.reason == StopReason::None) continue;
-        if (step.reason == StopReason::UnsupportedInstruction && dispatchSupervisorCall(out, step, syscalls)) {
+        if (step.reason == StopReason::UnsupportedInstruction &&
+            dispatchSupervisorCall(out, step, syscalls)) {
             if (out.exited || !out.cpuResult.detail.empty()) return out;
             continue;
         }
@@ -139,7 +167,8 @@ BootResult BootSession::boot(const uint8_t* image, std::size_t size, uint64_t ma
         return out;
     }
 
-    out.cpuResult = {StopReason::StepLimit, state_.r[15], 0, maxSteps, "boot step limit"};
+    out.cpuResult = {
+        StopReason::StepLimit, state_.r[15], 0, maxSteps, "boot step limit"};
     event(out, "step-limit");
     return out;
 }
