@@ -3,6 +3,7 @@
 #include "LC32DarwinSyscalls.hpp"
 #include "LC32DependencyAudit.hpp"
 #include "LC32DyldHandoff.hpp"
+#include "LC32DyldImageSet.hpp"
 #include "LC32Interpreter.hpp"
 #include "LC32MachODependencies.hpp"
 
@@ -25,6 +26,7 @@ struct DyldBootResult {
     bool exited = false;
     int exitCode = 0;
     DyldHandoffResult handoff;
+    DyldImageSetResult imageSet;
     MachODependencyResult dependencies;
     DependencyAuditResult dependencyAudit;
     Result cpuResult;
@@ -38,6 +40,8 @@ public:
                                GuestPathContext context,
                                const GuestPathExists& exists,
                                uint64_t maxSteps = 100000);
+    DyldBootResult bootImageSet(const DyldImageSetSpec& spec,
+                                uint64_t maxSteps = 100000);
     CPUState& state() { return state_; }
 
 private:
@@ -56,6 +60,7 @@ private:
     bool write(uint32_t address, const void* data, std::size_t size);
     void event(DyldBootResult& out, std::string stage, std::string detail = {}, uint32_t value = 0);
     bool dispatchSupervisorCall(DyldBootResult& out, const Result& stop, DarwinSyscalls& syscalls);
+    DyldBootResult executePrepared(DyldBootResult out, uint64_t maxSteps);
     DyldBootResult bootImpl(const DyldHandoffSpec& spec,
                             const GuestPathContext* auditContext,
                             const GuestPathExists* exists,
