@@ -1436,6 +1436,72 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
         return kKernSuccess;
     };
 
+    const auto queueHostMigReply = [&](const std::vector<uint8_t>& request,
+                                       uint32_t replyName) -> bool {
+        if (replyName == 0) return false;
+        auto replyPort = machPorts_.find(replyName);
+        if (replyPort == machPorts_.end() || replyPort->second.receiveRefs == 0 ||
+            request.size() < kMachHeaderSize) {
+            return false;
+        }
+
+        uint32_t requestId = 0;
+        std::memcpy(&requestId, request.data() + 20u, sizeof(requestId));
+        if (requestId != 200u && requestId != 202u) return false;
+
+        constexpr uint8_t kNdr[8] = {0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u};
+        std::vector<uint8_t> reply;
+        const auto appendWord = [&](uint32_t value) {
+            const size_t base = reply.size();
+            reply.resize(base + sizeof(value));
+            std::memcpy(reply.data() + base, &value, sizeof(value));
+        };
+        const auto appendBytes = [&](const void* bytes, size_t size) {
+            const size_t base = reply.size();
+            reply.resize(base + size);
+            std::memcpy(reply.data() + base, bytes, size);
+        };
+
+        reply.resize(kMachHeaderSize, 0u);
+        appendBytes(kNdr, sizeof(kNdr));
+        appendWord(kKernSuccess);
+
+        if (requestId == 202u) {
+            appendWord(4096u);
+        } else {
+            if (request.size() < 40u) return false;
+            uint32_t flavor = 0;
+            uint32_t requestedCount = 0;
+            std::memcpy(&flavor, request.data() + 32u, sizeof(flavor));
+            std::memcpy(&requestedCount, request.data() + 36u, sizeof(requestedCount));
+            if (flavor != 1u || requestedCount < 12u) return false;
+
+            appendWord(12u);
+            const uint32_t hostBasicInfo[12] = {
+                2u, 2u, 1024u * 1024u * 1024u,
+                12u, 9u, 0u,
+                2u, 2u, 2u, 2u,
+                1024u * 1024u * 1024u, 0u,
+            };
+            appendBytes(hostBasicInfo, sizeof(hostBasicInfo));
+        }
+
+        const uint32_t bits = 0u;
+        const uint32_t size = static_cast<uint32_t>(reply.size());
+        const uint32_t remote = 0u;
+        const uint32_t local = replyName;
+        const uint32_t reserved = 0u;
+        const uint32_t replyId = requestId + 100u;
+        std::memcpy(reply.data(), &bits, 4u);
+        std::memcpy(reply.data() + 4u, &size, 4u);
+        std::memcpy(reply.data() + 8u, &remote, 4u);
+        std::memcpy(reply.data() + 12u, &local, 4u);
+        std::memcpy(reply.data() + 16u, &reserved, 4u);
+        std::memcpy(reply.data() + 20u, &replyId, 4u);
+        replyPort->second.messages.push_back(std::move(reply));
+        return true;
+    };
+
     switch (number) {
         case 16: {
             if (!validTask(state.r[0])) {
@@ -1614,7 +1680,13 @@ TrapResult DarwinSyscalls::dispatchMach(CPUState& state, uint32_t number) {
                               "mach_msg missing send right");
                 }
                 message.resize(headerSize);
-                port->second.messages.push_back(std::move(message));
+                uint32_t replyName = 0;
+                std::memcpy(&replyName, message.data() + 12u, sizeof(replyName));
+                const bool handledHostMig =
+                    destination == kHostPort && queueHostMigReply(message, replyName);
+                if (!handledHostMig) {
+                    port->second.messages.push_back(std::move(message));
+                }
                 if (consumeSend) {
                     (void)adjustRefs(destination, kMachPortRightSend, -1);
                 } else if (consumeSendOnce) {

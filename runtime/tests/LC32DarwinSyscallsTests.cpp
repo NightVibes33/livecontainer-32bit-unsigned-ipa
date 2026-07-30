@@ -304,6 +304,79 @@ int main() {
     const auto receiveDestroyed = syscalls.dispatch(state, 0, false);
     assert(receiveDestroyed.handled && state.r[0] == kMachReceiveInvalidName);
 
+
+    state = {};
+    state.r[12] = static_cast<uint32_t>(-29);
+    const auto hostSelf = syscalls.dispatch(state, 0, false);
+    assert(hostSelf.handled && state.r[0] == 0x103u);
+    const uint32_t hostName = state.r[0];
+
+    const auto sendHostRequest = [&](uint32_t requestId,
+                                     const std::vector<uint32_t>& body) {
+        const uint32_t requestSize =
+            static_cast<uint32_t>(24u + body.size() * sizeof(uint32_t));
+        uint32_t header[6] = {19u, requestSize, hostName, replyName, 0u, requestId};
+        std::memcpy(lowMemory.data() + kMachMessageAddress, header, sizeof(header));
+        if (!body.empty()) {
+            std::memcpy(lowMemory.data() + kMachMessageAddress + sizeof(header),
+                        body.data(),
+                        body.size() * sizeof(uint32_t));
+        }
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachSendMsg;
+        state.r[2] = requestSize;
+        const auto sent = syscalls.dispatch(state, 0, false);
+        assert(sent.handled && state.r[0] == 0u);
+    };
+    const auto receiveHostReply = [&](uint32_t capacity) {
+        std::memset(lowMemory.data() + kMachMessageAddress, 0, capacity);
+        state = {};
+        state.r[12] = static_cast<uint32_t>(-31);
+        state.r[0] = kMachMessageAddress;
+        state.r[1] = kMachReceiveMsg;
+        state.r[3] = capacity;
+        state.r[4] = replyName;
+        return syscalls.dispatch(state, 0, false);
+    };
+
+    sendHostRequest(202u, {});
+    const auto pageReply = receiveHostReply(64u);
+    assert(pageReply.handled && state.r[0] == 0u);
+    uint32_t migReplySize = 0;
+    uint32_t migReplyId = 0;
+    uint32_t migReturn = 1;
+    uint32_t migPageSize = 0;
+    std::memcpy(&migReplySize, lowMemory.data() + kMachMessageAddress + 4u, 4u);
+    std::memcpy(&migReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&migReturn, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    std::memcpy(&migPageSize, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    assert(migReplySize == 40u && migReplyId == 302u);
+    assert(migReturn == 0u && migPageSize == 4096u);
+
+    sendHostRequest(200u, {0u, 1u, 1u, 12u});
+    const auto infoReply = receiveHostReply(128u);
+    assert(infoReply.handled && state.r[0] == 0u);
+    uint32_t hostInfoCount = 0;
+    uint32_t maxCpus = 0;
+    uint32_t availableCpus = 0;
+    uint32_t memorySize = 0;
+    uint32_t cpuType = 0;
+    uint32_t cpuSubtype = 0;
+    std::memcpy(&migReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
+    std::memcpy(&migReturn, lowMemory.data() + kMachMessageAddress + 32u, 4u);
+    std::memcpy(&hostInfoCount, lowMemory.data() + kMachMessageAddress + 36u, 4u);
+    std::memcpy(&maxCpus, lowMemory.data() + kMachMessageAddress + 40u, 4u);
+    std::memcpy(&availableCpus, lowMemory.data() + kMachMessageAddress + 44u, 4u);
+    std::memcpy(&memorySize, lowMemory.data() + kMachMessageAddress + 48u, 4u);
+    std::memcpy(&cpuType, lowMemory.data() + kMachMessageAddress + 52u, 4u);
+    std::memcpy(&cpuSubtype, lowMemory.data() + kMachMessageAddress + 56u, 4u);
+    assert(migReplyId == 300u && migReturn == 0u && hostInfoCount == 12u);
+    assert(maxCpus == 2u && availableCpus == 2u);
+    assert(memorySize == 1024u * 1024u * 1024u);
+    assert(cpuType == 12u && cpuSubtype == 9u);
+
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
     char* rootDirectory = ::mkdtemp(rootTemplate);
     assert(rootDirectory != nullptr);
