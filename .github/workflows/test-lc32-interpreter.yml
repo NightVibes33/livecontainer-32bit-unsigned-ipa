@@ -104,3 +104,12 @@ jobs:
             -o lc32-macho-dependency-tests
       - name: Run Mach-O dependency tests
         run: ./lc32-macho-dependency-tests
+      - name: Build guest path resolver tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32GuestPathResolver.cpp \
+            runtime/tests/LC32GuestPathResolverTests.cpp \
+            -o lc32-guest-path-resolver-tests
+      - name: Run guest path resolver tests
+        run: ./lc32-guest-path-resolver-tests
