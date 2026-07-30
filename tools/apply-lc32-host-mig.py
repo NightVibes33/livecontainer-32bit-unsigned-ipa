@@ -6,11 +6,9 @@ test_path = Path('runtime/tests/LC32DarwinSyscallsTests.cpp')
 source = source_path.read_text()
 tests = test_path.read_text()
 
-anchor = '''    const auto adjustRefs = [&](uint32_t name,
-                                 uint32_t right,
-                                 int32_t delta) -> uint32_t {'''
+anchor = '''    switch (number) {'''
 if anchor not in source:
-    raise SystemExit('adjustRefs anchor missing')
+    raise SystemExit('Mach switch anchor missing')
 
 mig_helper = '''    const auto queueHostMigReply = [&](const std::vector<uint8_t>& request,
                                        uint32_t replyName) -> bool {
@@ -38,8 +36,6 @@ mig_helper = '''    const auto queueHostMigReply = [&](const std::vector<uint8_t
             std::memcpy(reply.data() + base, bytes, size);
         };
 
-        // Reserve the 24-byte mach_msg_header_t. The message is queued directly
-        // on the task-local reply port, so no host IPC or port-right transfer occurs.
         reply.resize(kMachHeaderSize, 0u);
         appendBytes(kNdr, sizeof(kNdr));
         appendWord(kKernSuccess);
@@ -81,7 +77,11 @@ mig_helper = '''    const auto queueHostMigReply = [&](const std::vector<uint8_t
     };
 
 '''
-source = source.replace(anchor, mig_helper + anchor, 1)
+# Insert into dispatchMach, using the last switch(number) in the file.
+position = source.rfind(anchor)
+if position < 0:
+    raise SystemExit('Mach switch anchor missing')
+source = source[:position] + mig_helper + source[position:]
 
 old_send = '''                message.resize(headerSize);
                 port->second.messages.push_back(std::move(message));
@@ -154,7 +154,6 @@ mig_tests = r'''
     assert(migReplySize == 40u && migReplyId == 302u);
     assert(migReturn == 0u && migPageSize == 4096u);
 
-    // host_info request: NDR (8 bytes), HOST_BASIC_INFO flavor, and count.
     sendHostRequest(200u, {0u, 1u, 1u, 12u});
     const auto infoReply = receiveHostReply(128u);
     assert(infoReply.handled && state.r[0] == 0u);
