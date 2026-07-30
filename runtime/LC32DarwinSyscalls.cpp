@@ -56,15 +56,18 @@ void DarwinSyscalls::writeReturn(CPUState& state, const TrapResult& result) cons
 }
 
 TrapResult DarwinSyscalls::dispatch(CPUState& state, uint32_t svcImmediate, bool) {
-    uint32_t rawNumber = state.r[12];
+    const uint32_t rawNumber = state.r[12];
     TrapResult result;
 
-    if ((rawNumber & kUnixTrapBase) != 0) {
-        result = dispatchUnix(state, rawNumber & ~kUnixTrapBase);
-        result.trapClass = TrapClass::Unix;
-    } else if (rawNumber >= kMachTrapBase) {
+    // Darwin Mach traps are encoded as small negative numbers in r12. Test this
+    // range before the BSD high-bit marker because every negative value also has
+    // bit 31 set and would otherwise be misclassified as a Unix syscall.
+    if (rawNumber >= kMachTrapBase) {
         result = dispatchMach(state, static_cast<uint32_t>(-static_cast<int32_t>(rawNumber)));
         result.trapClass = TrapClass::Mach;
+    } else if ((rawNumber & kUnixTrapBase) != 0) {
+        result = dispatchUnix(state, rawNumber & ~kUnixTrapBase);
+        result.trapClass = TrapClass::Unix;
     } else if (svcImmediate != 0) {
         result = dispatchUnix(state, svcImmediate);
         result.trapClass = TrapClass::Unix;
@@ -80,22 +83,22 @@ TrapResult DarwinSyscalls::dispatch(CPUState& state, uint32_t svcImmediate, bool
 
 TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
     switch (number) {
-        case 1: { // exit
+        case 1: {
             TrapResult r = ok(number, static_cast<int32_t>(state.r[0]), "exit");
             r.shouldStop = true;
             return r;
         }
-        case 20: // getpid
+        case 20:
             return ok(number, static_cast<int32_t>(::getpid()), "getpid");
-        case 24: // getuid
+        case 24:
             return ok(number, static_cast<int32_t>(::getuid()), "getuid");
-        case 25: // geteuid
+        case 25:
             return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
-        case 47: // getgid
+        case 47:
             return ok(number, static_cast<int32_t>(::getgid()), "getgid");
-        case 43: // getegid
+        case 43:
             return ok(number, static_cast<int32_t>(::getegid()), "getegid");
-        case 116: { // gettimeofday
+        case 116: {
             const uint32_t tvAddress = state.r[0];
             if (!tvAddress) return ok(number, 0, "gettimeofday(null)");
             struct GuestTimeval { int32_t sec; int32_t usec; } guest{};
@@ -108,7 +111,7 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             }
             return ok(number, 0, "gettimeofday");
         }
-        case 4: { // write
+        case 4: {
             const int fd = static_cast<int>(state.r[0]);
             const uint32_t bufferAddress = state.r[1];
             const size_t count = state.r[2];
@@ -121,13 +124,12 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             if (written < 0) return fail(number, errno, "write host call");
             return ok(number, static_cast<int32_t>(written), "write");
         }
-        case 5: { // open
+        case 5: {
             std::string path;
             if (!readCString(state.r[0], path)) return fail(number, EFAULT, "open path");
-            // Host filesystem access remains deliberately disabled until the guest-root path mapper exists.
             return fail(number, ENOENT, "open blocked pending guest-root mapper");
         }
-        case 6: // close
+        case 6:
             return ok(number, 0, "close virtualized");
         default: {
             TrapResult r;
@@ -140,13 +142,13 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
 
 TrapResult DarwinSyscalls::dispatchMach(CPUState&, uint32_t number) {
     switch (number) {
-        case 26: // mach_reply_port
+        case 26:
             return ok(number, 0x100, "mach_reply_port placeholder");
-        case 27: // thread_self_trap
+        case 27:
             return ok(number, 0x101, "thread_self_trap placeholder");
-        case 28: // task_self_trap
+        case 28:
             return ok(number, 0x102, "task_self_trap placeholder");
-        case 29: // host_self_trap
+        case 29:
             return ok(number, 0x103, "host_self_trap placeholder");
         default: {
             TrapResult r;
