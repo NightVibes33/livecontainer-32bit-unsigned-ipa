@@ -34,6 +34,10 @@ jobs:
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/tests/LC32VirtualRuntimeTests.cpp -o lc32-virtual-runtime-tests
       - name: Run clean-room virtual runtime tests
         run: ./lc32-virtual-runtime-tests
+      - name: Build ARMv7 virtual binding tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/tests/LC32MachOVirtualBindingsTests.cpp -o lc32-macho-virtual-binding-tests
+      - name: Run ARMv7 virtual binding tests
+        run: ./lc32-macho-virtual-binding-tests
       - name: Build Darwin syscall tests
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32DarwinSyscalls.cpp runtime/tests/LC32DarwinSyscallsTests.cpp -o lc32-darwin-syscall-tests
       - name: Run Darwin syscall tests
