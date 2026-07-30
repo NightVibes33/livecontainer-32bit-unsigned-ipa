@@ -19,7 +19,7 @@ jobs:
           ref: feature/liveexec32-fixitfelix
           fetch-depth: 0
 
-      - name: Apply VM advisory patch
+      - name: Apply validated VM advisory patch
         run: python3 tools/apply_vm_advisory.py
 
       - name: Commit validated VM advisory syscalls
