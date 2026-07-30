@@ -104,7 +104,11 @@ jobs:
           ditto "$LIVEEXEC_APP" "$APP/LiveExec32.app"
           test -f "$APP/LiveExec32.app/LiveExec32"
           strings "$APP/LiveExec32.app/LiveExec32" | grep -q 'LC32_GUEST_EXECUTABLE'
-          strings "$APP/LiveContainer" | grep -q 'LC32_GUEST_EXECUTABLE'
+          if ! grep -R -a -q --exclude='LiveExec32' 'LC32_GUEST_EXECUTABLE' "$APP"; then
+            echo 'LiveContainer launch-contract marker is missing from all packaged host binaries' >&2
+            find "$APP" -type f -maxdepth 5 -print >&2
+            exit 1
+          fi
           tools/package-unsigned-ipa.sh "$APP" "$OUTPUT_IPA"
 
       - name: Verify dual architecture routing package
@@ -117,8 +121,8 @@ jobs:
           test -f "$APP/LiveExec32.app/LiveExec32"
           file "$APP/LiveContainer"
           file "$APP/LiveExec32.app/LiveExec32"
-          strings "$APP/LiveContainer" | grep -q 'JIT is required to run 32-bit apps through LiveExec32'
-          strings "$APP/LiveContainer" | grep -q 'LC32_GUEST_EXECUTABLE'
+          grep -R -a -q 'JIT is required to run 32-bit apps through LiveExec32' "$APP"
+          grep -R -a -q --exclude='LiveExec32' 'LC32_GUEST_EXECUTABLE' "$APP"
           strings "$APP/LiveExec32.app/LiveExec32" | grep -q 'guest-executable-mapped'
           strings "$APP/LiveExec32.app/LiveExec32" | grep -q 'guest-dyld-mapped'
           shasum -a 256 "$OUTPUT_IPA" > "$OUTPUT_IPA.sha256"
