@@ -1,0 +1,191 @@
+name: Scan IPA Compatibility Campaign
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Workflow run containing the IPA library artifact
+        required: true
+        type: string
+      source_artifact_name:
+        description: Artifact containing IPA files
+        required: true
+        default: ipa-library
+        type: string
+      shard_count:
+        description: Parallel scanner jobs
+        required: true
+        default: '20'
+        type: string
+      limit_per_shard:
+        description: Optional per-shard limit; 0 scans everything
+        required: true
+        default: '0'
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          SHARD_COUNT: ${{ inputs.shard_count }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          count = int(os.environ['SHARD_COUNT'])
+          if count < 1 or count > 100:
+              raise SystemExit('shard_count must be between 1 and 100')
+          print('value=' + json.dumps({'shard': list(range(count))}, separators=(',', ':')))
+          PY
+
+  scan:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/liveexec32-fixitfelix
+
+      - name: Download IPA library artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_ARTIFACT_NAME: ${{ inputs.source_artifact_name }}
+        run: |
+          mkdir -p campaign-input
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$SOURCE_ARTIFACT_NAME" \
+            --dir campaign-input
+          count="$(find campaign-input -type f -iname '*.ipa' | wc -l | tr -d ' ')"
+          echo "Downloaded $count IPA files"
+          test "$count" -gt 0
+
+      - name: Scan shard
+        env:
+          SHARD_COUNT: ${{ inputs.shard_count }}
+          LIMIT_PER_SHARD: ${{ inputs.limit_per_shard }}
+        run: |
+          python3 tools/run-ipa-compat-campaign.py campaign-input \
+            --output "campaign-output/shard-${{ matrix.shard }}" \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count "$SHARD_COUNT" \
+            --limit "$LIMIT_PER_SHARD"
+
+      - name: Upload shard report
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipa-compat-shard-${{ matrix.shard }}
+          path: campaign-output/shard-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    needs: scan
+    if: ${{ always() && needs.scan.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feature/liveexec32-fixitfelix
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v7
+        with:
+          pattern: ipa-compat-shard-*
+          path: shards
+          merge-multiple: false
+
+      - name: Aggregate campaign
+        run: |
+          python3 - <<'PY'
+          import csv, json
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          app_rows = []
+          classes = Counter()
+          bridge_apps = Counter()
+          first = Counter()
+          examples = defaultdict(list)
+          for path in sorted(Path('shards').rglob('apps.json')):
+              rows = json.loads(path.read_text())
+              app_rows.extend(rows)
+              for row in rows:
+                  classes[row['classification']] += 1
+                  if row.get('firstBridge'):
+                      first[row['firstBridge']] += 1
+                  for bridge in set(row.get('bridgeKeys', [])):
+                      bridge_apps[bridge] += 1
+                      if len(examples[bridge]) < 10:
+                          examples[bridge].append(row.get('bundleIdentifier') or row['ipa'])
+
+          ranking = []
+          for bridge, count in bridge_apps.most_common():
+              ranking.append({
+                  'bridge': bridge,
+                  'appsDependingOnBridge': count,
+                  'appsBlockedFirst': first[bridge],
+                  'coveragePercent': round(count / len(app_rows) * 100, 3) if app_rows else 0,
+                  'examples': examples[bridge],
+              })
+
+          out = Path('campaign-final')
+          out.mkdir()
+          summary = {
+              'schemaVersion': 1,
+              'totalScanned': len(app_rows),
+              'classifications': dict(classes),
+              'bridgeRanking': ranking,
+              'note': 'Static coverage ranking only; it does not prove launch or gameplay.',
+          }
+          (out / 'apps.json').write_text(json.dumps(app_rows, indent=2, sort_keys=True) + '\n')
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+
+          md = ['# LC32 IPA Compatibility Campaign', '', f"Scanned **{len(app_rows)}** IPA files.", '',
+                '## Classification', '', '| Classification | Apps |', '|---|---:|']
+          md += [f'| {name} | {count} |' for name, count in classes.most_common()]
+          md += ['', '## Bridge coverage ranking', '',
+                 '| Rank | Bridge | Apps | First blocker | Coverage |', '|---:|---|---:|---:|---:|']
+          for rank, item in enumerate(ranking[:250], 1):
+              md.append(f"| {rank} | `{item['bridge']}` | {item['appsDependingOnBridge']} | {item['appsBlockedFirst']} | {item['coveragePercent']}% |")
+          (out / 'report.md').write_text('\n'.join(md) + '\n')
+
+          fields = ['ipa','bundleIdentifier','displayName','bundleVersion','minimumOSVersion','sdkName',
+                    'classification','passedStaticGate','firstBridge','dependencies','errors']
+          with (out / 'apps.csv').open('w', newline='', encoding='utf-8') as fh:
+              writer = csv.DictWriter(fh, fieldnames=fields)
+              writer.writeheader()
+              for row in app_rows:
+                  writer.writerow({
+                      'ipa': row.get('ipa'), 'bundleIdentifier': row.get('bundleIdentifier'),
+                      'displayName': row.get('displayName'), 'bundleVersion': row.get('bundleVersion'),
+                      'minimumOSVersion': row.get('minimumOSVersion'), 'sdkName': row.get('sdkName'),
+                      'classification': row.get('classification'), 'passedStaticGate': row.get('passedStaticGate'),
+                      'firstBridge': row.get('firstBridge'),
+                      'dependencies': '|'.join(row.get('dependencies', [])),
+                      'errors': '|'.join(row.get('errors', [])),
+                  })
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Add report to job summary
+        run: cat campaign-final/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload complete campaign report
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipa-compat-campaign-report
+          path: campaign-final
+          if-no-files-found: error
+          retention-days: 90
