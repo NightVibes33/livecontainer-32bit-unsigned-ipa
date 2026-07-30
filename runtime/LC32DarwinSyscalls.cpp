@@ -65,6 +65,9 @@ constexpr int32_t kHwMachineArch = 12;
 constexpr int32_t kHwMemorySize = 24;
 constexpr int32_t kHwAvailableCpu = 25;
 constexpr uint32_t kCtlMaximumName = 12u;
+constexpr uint32_t kRlimitPosixFlag = 0x1000u;
+constexpr uint64_t kRlimitInfinity = (1ull << 63u) - 1u;
+constexpr uint32_t kGuestDescriptorLimit = 10240u;
 
 #pragma pack(push, 4)
 struct GuestTimespec32 {
@@ -94,10 +97,17 @@ struct GuestStat64 {
     uint32_t longSpare = 0;
     int64_t quadSpare[2]{};
 };
+
+
+struct GuestRlimit {
+    uint64_t current = 0;
+    uint64_t maximum = 0;
+};
 #pragma pack(pop)
 
 static_assert(sizeof(GuestTimespec32) == 8, "unexpected ARMv7 timespec layout");
 static_assert(sizeof(GuestStat64) == 108, "unexpected iOS 6 user32_stat64 layout");
+static_assert(sizeof(GuestRlimit) == 16, "unexpected ARMv7 rlimit layout");
 
 int32_t clampSigned32(int64_t value) {
     if (value > INT32_MAX) return INT32_MAX;
@@ -559,6 +569,10 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             }
             return ok(number, 0, "mincore");
         }
+        case 89:
+            return ok(number,
+                      static_cast<int32_t>(kGuestDescriptorLimit),
+                      "getdtablesize");
         case 92: {
             const int guestFd = static_cast<int>(state.r[0]);
             const uint32_t command = state.r[1];
@@ -598,6 +612,103 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EFAULT, "gettimeofday guest write");
             }
             return ok(number, 0, "gettimeofday");
+        }
+        case 153:
+        case 414: {
+            const int guestFd = static_cast<int>(state.r[0]);
+            const uint32_t bufferAddress = state.r[1];
+            const size_t count = state.r[2];
+            if (count > kMaximumTransfer) {
+                return fail(number, EINVAL, "pread length");
+            }
+            const auto file = guestFiles_.find(guestFd);
+            if (file == guestFiles_.end()) {
+                return fail(number, EBADF, "pread guest fd");
+            }
+
+            uint32_t offsetLowAddress = 0;
+            uint32_t offsetHighAddress = 0;
+            if (!addAddress(state.r[13], 0u, offsetLowAddress) ||
+                !addAddress(state.r[13], 4u, offsetHighAddress)) {
+                return fail(number, EFAULT, "pread stack address");
+            }
+            uint32_t offsetLow = 0;
+            uint32_t offsetHigh = 0;
+            if (!memory_.read ||
+                !memory_.read(offsetLowAddress, &offsetLow, sizeof(offsetLow)) ||
+                !memory_.read(offsetHighAddress, &offsetHigh, sizeof(offsetHigh))) {
+                return fail(number, EFAULT, "pread stack read");
+            }
+            const uint64_t rawOffset = static_cast<uint64_t>(offsetLow) |
+                                       (static_cast<uint64_t>(offsetHigh) << 32u);
+            const int64_t offset = static_cast<int64_t>(rawOffset);
+            if (offset < 0) return fail(number, EINVAL, "pread offset");
+
+            std::vector<uint8_t> buffer(count);
+            ssize_t bytesRead = -1;
+            do {
+                bytesRead = ::pread(file->second.hostFd,
+                                    buffer.data(),
+                                    buffer.size(),
+                                    static_cast<off_t>(offset));
+            } while (bytesRead < 0 && errno == EINTR);
+            if (bytesRead < 0) return fail(number, errno, "pread host call");
+            if (bytesRead > 0 &&
+                (!memory_.write ||
+                 !memory_.write(bufferAddress,
+                                buffer.data(),
+                                static_cast<size_t>(bytesRead)))) {
+                return fail(number, EFAULT, "pread guest write");
+            }
+            return ok(number,
+                      static_cast<int32_t>(bytesRead),
+                      number == 414 ? "pread_nocancel" : "pread");
+        }
+        case 194: {
+            const uint32_t rawResource = state.r[0];
+            if ((rawResource & ~(kRlimitPosixFlag | 0x0fu)) != 0) {
+                return fail(number, EINVAL, "getrlimit flags");
+            }
+            const uint32_t resource = rawResource & ~kRlimitPosixFlag;
+            GuestRlimit limit;
+            switch (resource) {
+                case 0: // RLIMIT_CPU
+                case 1: // RLIMIT_FSIZE
+                    limit = {kRlimitInfinity, kRlimitInfinity};
+                    break;
+                case 2: // RLIMIT_DATA
+                    limit = {512ull * 1024ull * 1024ull,
+                             768ull * 1024ull * 1024ull};
+                    break;
+                case 3: // RLIMIT_STACK
+                    limit = {8ull * 1024ull * 1024ull,
+                             64ull * 1024ull * 1024ull};
+                    break;
+                case 4: // RLIMIT_CORE
+                    limit = {0, 0};
+                    break;
+                case 5: // RLIMIT_AS
+                    limit = {1024ull * 1024ull * 1024ull,
+                             1024ull * 1024ull * 1024ull};
+                    break;
+                case 6: // RLIMIT_MEMLOCK
+                    limit = {16ull * 1024ull * 1024ull,
+                             64ull * 1024ull * 1024ull};
+                    break;
+                case 7: // RLIMIT_NPROC
+                    limit = {256, 512};
+                    break;
+                case 8: // RLIMIT_NOFILE
+                    limit = {256, kGuestDescriptorLimit};
+                    break;
+                default:
+                    return fail(number, EINVAL, "getrlimit resource");
+            }
+            if (!memory_.write ||
+                !memory_.write(state.r[1], &limit, sizeof(limit))) {
+                return fail(number, EFAULT, "getrlimit guest write");
+            }
+            return ok(number, 0, "getrlimit");
         }
         case 197: {
             const uint32_t requestedAddress = state.r[0];

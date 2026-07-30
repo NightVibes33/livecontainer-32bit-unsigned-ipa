@@ -45,6 +45,7 @@ int main() {
     constexpr uint32_t kSysctlNameAddress = 0x1600u;
     constexpr uint32_t kSysctlLengthAddress = 0x1640u;
     constexpr uint32_t kSysctlOutputAddress = 0x1680u;
+    constexpr uint32_t kRlimitAddress = 0x1700u;
     constexpr uint32_t kStackAddress = 0x3000u;
 
     constexpr uint32_t kProtRead = 0x01u;
@@ -640,6 +641,148 @@ int main() {
     state.r[13] = static_cast<uint32_t>(lowMemory.size() - 4u);
     const auto badSysctlStack = rooted.dispatch(state, 0x80u, false);
     assert(badSysctlStack.handled && badSysctlStack.errorNumber == EFAULT);
+
+    uint32_t seekWhence = SEEK_SET;
+    std::memcpy(lowMemory.data() + kStackAddress,
+                &seekWhence,
+                sizeof(seekWhence));
+    state = {};
+    state.r[12] = 199;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[2] = 3u;
+    state.r[3] = 0u;
+    state.r[13] = kStackAddress;
+    const auto positioned = rooted.dispatch(state, 0x80u, false);
+    assert(positioned.handled && positioned.errorNumber == 0);
+    assert(state.r[0] == 3u && state.r[1] == 0u);
+
+    uint32_t preadOffsetLow = 7u;
+    uint32_t preadOffsetHigh = 0u;
+    std::memcpy(lowMemory.data() + kStackAddress,
+                &preadOffsetLow,
+                sizeof(preadOffsetLow));
+    std::memcpy(lowMemory.data() + kStackAddress + sizeof(uint32_t),
+                &preadOffsetHigh,
+                sizeof(preadOffsetHigh));
+    state = {};
+    state.r[12] = 153;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kReadAddress;
+    state.r[2] = 5u;
+    state.r[13] = kStackAddress;
+    const auto positionedRead = rooted.dispatch(state, 0x80u, false);
+    assert(positionedRead.handled && positionedRead.errorNumber == 0);
+    assert(state.r[0] == 5u);
+    assert(std::string(reinterpret_cast<char*>(lowMemory.data() + kReadAddress),
+                       5u) == "dylib");
+
+    seekWhence = SEEK_CUR;
+    std::memcpy(lowMemory.data() + kStackAddress,
+                &seekWhence,
+                sizeof(seekWhence));
+    state = {};
+    state.r[12] = 199;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[2] = 0u;
+    state.r[3] = 0u;
+    state.r[13] = kStackAddress;
+    const auto unchangedPosition = rooted.dispatch(state, 0x80u, false);
+    assert(unchangedPosition.handled && unchangedPosition.errorNumber == 0);
+    assert(state.r[0] == 3u && state.r[1] == 0u);
+
+    preadOffsetLow = 0u;
+    preadOffsetHigh = 0u;
+    std::memcpy(lowMemory.data() + kStackAddress,
+                &preadOffsetLow,
+                sizeof(preadOffsetLow));
+    std::memcpy(lowMemory.data() + kStackAddress + sizeof(uint32_t),
+                &preadOffsetHigh,
+                sizeof(preadOffsetHigh));
+    state = {};
+    state.r[12] = 414;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kReadAddress;
+    state.r[2] = 6u;
+    state.r[13] = kStackAddress;
+    const auto noCancelRead = rooted.dispatch(state, 0x80u, false);
+    assert(noCancelRead.handled && noCancelRead.errorNumber == 0);
+    assert(std::string(reinterpret_cast<char*>(lowMemory.data() + kReadAddress),
+                       6u) == "legacy");
+
+    preadOffsetHigh = 0xffffffffu;
+    std::memcpy(lowMemory.data() + kStackAddress + sizeof(uint32_t),
+                &preadOffsetHigh,
+                sizeof(preadOffsetHigh));
+    state = {};
+    state.r[12] = 153;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kReadAddress;
+    state.r[2] = 1u;
+    state.r[13] = kStackAddress;
+    const auto negativePread = rooted.dispatch(state, 0x80u, false);
+    assert(negativePread.handled && negativePread.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 153;
+    state.r[0] = static_cast<uint32_t>(guestFd);
+    state.r[1] = kReadAddress;
+    state.r[2] = 1u;
+    state.r[13] = static_cast<uint32_t>(lowMemory.size() - 4u);
+    const auto badPreadStack = rooted.dispatch(state, 0x80u, false);
+    assert(badPreadStack.handled && badPreadStack.errorNumber == EFAULT);
+
+    state = {};
+    state.r[12] = 89;
+    const auto descriptorLimit = rooted.dispatch(state, 0x80u, false);
+    assert(descriptorLimit.handled && descriptorLimit.errorNumber == 0);
+    assert(state.r[0] == 10240u);
+
+    state = {};
+    state.r[12] = 194;
+    state.r[0] = 3u;
+    state.r[1] = kRlimitAddress;
+    const auto stackLimit = rooted.dispatch(state, 0x80u, false);
+    assert(stackLimit.handled && stackLimit.errorNumber == 0);
+    uint64_t stackCurrent = 0;
+    uint64_t stackMaximum = 0;
+    std::memcpy(&stackCurrent,
+                lowMemory.data() + kRlimitAddress,
+                sizeof(stackCurrent));
+    std::memcpy(&stackMaximum,
+                lowMemory.data() + kRlimitAddress + sizeof(uint64_t),
+                sizeof(stackMaximum));
+    assert(stackCurrent == 8ull * 1024ull * 1024ull);
+    assert(stackMaximum == 64ull * 1024ull * 1024ull);
+
+    state = {};
+    state.r[12] = 194;
+    state.r[0] = 0x1000u | 8u;
+    state.r[1] = kRlimitAddress;
+    const auto fileLimit = rooted.dispatch(state, 0x80u, false);
+    assert(fileLimit.handled && fileLimit.errorNumber == 0);
+    uint64_t fileCurrent = 0;
+    uint64_t fileMaximum = 0;
+    std::memcpy(&fileCurrent,
+                lowMemory.data() + kRlimitAddress,
+                sizeof(fileCurrent));
+    std::memcpy(&fileMaximum,
+                lowMemory.data() + kRlimitAddress + sizeof(uint64_t),
+                sizeof(fileMaximum));
+    assert(fileCurrent == 256u && fileMaximum == 10240u);
+
+    state = {};
+    state.r[12] = 194;
+    state.r[0] = 99u;
+    state.r[1] = kRlimitAddress;
+    const auto badLimitResource = rooted.dispatch(state, 0x80u, false);
+    assert(badLimitResource.handled && badLimitResource.errorNumber == EINVAL);
+
+    state = {};
+    state.r[12] = 194;
+    state.r[0] = 3u;
+    state.r[1] = static_cast<uint32_t>(lowMemory.size() - 8u);
+    const auto badLimitPointer = rooted.dispatch(state, 0x80u, false);
+    assert(badLimitPointer.handled && badLimitPointer.errorNumber == EFAULT);
 
     state = {};
     state.r[12] = 92;
