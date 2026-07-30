@@ -1,6 +1,11 @@
 name: Validate iOSObscura IPA Batch
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/validate_iosobscura_batch.py'
+      - '.github/workflows/validate-iosobscura.yml'
   workflow_dispatch:
     inputs:
       offset:
@@ -20,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: iosobscura-${{ inputs.offset }}-${{ inputs.limit }}
+  group: iosobscura-${{ github.event.inputs.offset || '0' }}-${{ github.event.inputs.limit || '25' }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +33,10 @@ jobs:
     name: Validate archive batch
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    env:
+      BATCH_OFFSET: ${{ github.event.inputs.offset || '0' }}
+      BATCH_LIMIT: ${{ github.event.inputs.limit || '25' }}
+      MAX_FILE_MIB: ${{ github.event.inputs.max_file_mib || '750' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -36,19 +45,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ inputs.offset }}' =~ ^[0-9]+$ ]]
-          [[ '${{ inputs.limit }}' =~ ^[0-9]+$ ]]
-          [[ '${{ inputs.max_file_mib }}' =~ ^[0-9]+$ ]]
-          test '${{ inputs.limit }}' -ge 1
-          test '${{ inputs.limit }}' -le 250
-          test '${{ inputs.max_file_mib }}' -ge 1
+          [[ "$BATCH_OFFSET" =~ ^[0-9]+$ ]]
+          [[ "$BATCH_LIMIT" =~ ^[0-9]+$ ]]
+          [[ "$MAX_FILE_MIB" =~ ^[0-9]+$ ]]
+          test "$BATCH_LIMIT" -ge 1
+          test "$BATCH_LIMIT" -le 250
+          test "$MAX_FILE_MIB" -ge 1
 
       - name: Validate IPA batch
         run: |
           python3 tools/validate_iosobscura_batch.py \
-            --offset '${{ inputs.offset }}' \
-            --limit '${{ inputs.limit }}' \
-            --max-file-mib '${{ inputs.max_file_mib }}' \
+            --offset "$BATCH_OFFSET" \
+            --limit "$BATCH_LIMIT" \
+            --max-file-mib "$MAX_FILE_MIB" \
             --output validation-results.json
 
       - name: Write job summary
@@ -86,7 +95,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: iosobscura-validation-${{ inputs.offset }}-${{ inputs.limit }}
+          name: iosobscura-validation-${{ env.BATCH_OFFSET }}-${{ env.BATCH_LIMIT }}
           path: validation-results.json
           if-no-files-found: warn
           retention-days: 30
