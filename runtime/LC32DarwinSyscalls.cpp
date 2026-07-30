@@ -103,22 +103,28 @@ GuestStat64 guestStat64(const struct stat& host) {
 }
 
 TrapResult ok(uint32_t number, int32_t value, const char* detail) {
-    TrapResult r;
-    r.handled = true;
-    r.returnValue = value;
-    r.number = number;
-    r.detail = detail;
-    return r;
+    TrapResult result;
+    result.handled = true;
+    result.returnValue = value;
+    result.number = number;
+    result.detail = detail;
+    return result;
+}
+
+TrapResult ok64(CPUState& state, uint32_t number, int64_t value, const char* detail) {
+    const uint64_t bits = static_cast<uint64_t>(value);
+    state.r[1] = static_cast<uint32_t>(bits >> 32u);
+    return ok(number, static_cast<int32_t>(static_cast<uint32_t>(bits)), detail);
 }
 
 TrapResult fail(uint32_t number, int errorNumber, const char* detail) {
-    TrapResult r;
-    r.handled = true;
-    r.returnValue = -1;
-    r.errorNumber = errorNumber;
-    r.number = number;
-    r.detail = detail;
-    return r;
+    TrapResult result;
+    result.handled = true;
+    result.returnValue = -1;
+    result.errorNumber = errorNumber;
+    result.number = number;
+    result.detail = detail;
+    return result;
 }
 } // namespace
 
@@ -135,10 +141,11 @@ bool DarwinSyscalls::readCString(uint32_t address, std::string& out, size_t limi
     out.clear();
     if (!memory_.read || limit == 0) return false;
     for (size_t i = 0; i < limit; ++i) {
-        char c = 0;
-        if (!memory_.read(address + static_cast<uint32_t>(i), &c, 1)) return false;
-        if (c == '\0') return true;
-        out.push_back(c);
+        if (i > UINT32_MAX - address) return false;
+        char character = 0;
+        if (!memory_.read(address + static_cast<uint32_t>(i), &character, 1)) return false;
+        if (character == '\0') return true;
+        out.push_back(character);
     }
     return false;
 }
@@ -268,9 +275,9 @@ TrapResult DarwinSyscalls::dispatch(CPUState& state, uint32_t svcImmediate, bool
 TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
     switch (number) {
         case 1: {
-            TrapResult r = ok(number, static_cast<int32_t>(state.r[0]), "exit");
-            r.shouldStop = true;
-            return r;
+            TrapResult result = ok(number, static_cast<int32_t>(state.r[0]), "exit");
+            result.shouldStop = true;
+            return result;
         }
         case 3: {
             const int guestFd = static_cast<int>(state.r[0]);
@@ -283,7 +290,8 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             const ssize_t bytesRead = ::read(file->second.hostFd, buffer.data(), count);
             if (bytesRead < 0) return fail(number, errno, "read host call");
             if (bytesRead != 0 &&
-                (!memory_.write || !memory_.write(bufferAddress, buffer.data(), static_cast<size_t>(bytesRead)))) {
+                (!memory_.write ||
+                 !memory_.write(bufferAddress, buffer.data(), static_cast<size_t>(bytesRead)))) {
                 return fail(number, EFAULT, "read guest write");
             }
             return ok(number, static_cast<int32_t>(bytesRead), "read");
@@ -333,7 +341,9 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             const int guestFd = static_cast<int>(state.r[0]);
             const auto file = guestFiles_.find(guestFd);
             if (file == guestFiles_.end()) {
-                if (guestFd >= 0 && guestFd <= 2) return ok(number, 0, "close standard fd virtualized");
+                if (guestFd >= 0 && guestFd <= 2) {
+                    return ok(number, 0, "close standard fd virtualized");
+                }
                 return fail(number, EBADF, "close guest fd");
             }
             const int hostFd = file->second.hostFd;
@@ -341,9 +351,12 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             if (::close(hostFd) != 0) return fail(number, errno, "close host call");
             return ok(number, 0, "close");
         }
-        case 20: return ok(number, static_cast<int32_t>(::getpid()), "getpid");
-        case 24: return ok(number, static_cast<int32_t>(::getuid()), "getuid");
-        case 25: return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
+        case 20:
+            return ok(number, static_cast<int32_t>(::getpid()), "getpid");
+        case 24:
+            return ok(number, static_cast<int32_t>(::getuid()), "getuid");
+        case 25:
+            return ok(number, static_cast<int32_t>(::geteuid()), "geteuid");
         case 33: {
             std::string path;
             if (!readCString(state.r[0], path)) return fail(number, EFAULT, "access path");
@@ -360,8 +373,10 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             }
             return ok(number, 0, "access");
         }
-        case 43: return ok(number, static_cast<int32_t>(::getegid()), "getegid");
-        case 47: return ok(number, static_cast<int32_t>(::getgid()), "getgid");
+        case 43:
+            return ok(number, static_cast<int32_t>(::getegid()), "getegid");
+        case 47:
+            return ok(number, static_cast<int32_t>(::getgid()), "getgid");
         case 92: {
             const int guestFd = static_cast<int>(state.r[0]);
             const uint32_t command = state.r[1];
@@ -370,28 +385,65 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             if (file == guestFiles_.end()) return fail(number, EBADF, "fcntl guest fd");
             switch (command) {
                 case kFcntlGetFd:
-                    return ok(number, static_cast<int32_t>(file->second.descriptorFlags), "fcntl F_GETFD");
+                    return ok(number,
+                              static_cast<int32_t>(file->second.descriptorFlags),
+                              "fcntl F_GETFD");
                 case kFcntlSetFd:
                     file->second.descriptorFlags = argument & kGuestFdCloseExec;
                     return ok(number, 0, "fcntl F_SETFD");
                 case kFcntlGetFl:
-                    return ok(number, static_cast<int32_t>(file->second.openFlags), "fcntl F_GETFL");
+                    return ok(number,
+                              static_cast<int32_t>(file->second.openFlags),
+                              "fcntl F_GETFL");
                 default:
                     return fail(number, EINVAL, "fcntl unsupported command");
             }
         }
         case 116: {
-            const uint32_t tvAddress = state.r[0];
-            if (!tvAddress) return ok(number, 0, "gettimeofday(null)");
-            struct GuestTimeval { int32_t sec; int32_t usec; } guest{};
+            const uint32_t timevalAddress = state.r[0];
+            if (!timevalAddress) return ok(number, 0, "gettimeofday(null)");
+            struct GuestTimeval {
+                int32_t seconds;
+                int32_t microseconds;
+            } guest{};
             const auto now = std::chrono::system_clock::now().time_since_epoch();
-            const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
-            guest.sec = static_cast<int32_t>(micros / 1000000);
-            guest.usec = static_cast<int32_t>(micros % 1000000);
-            if (!memory_.write || !memory_.write(tvAddress, &guest, sizeof(guest))) {
+            const auto microseconds =
+                std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+            guest.seconds = static_cast<int32_t>(microseconds / 1000000);
+            guest.microseconds = static_cast<int32_t>(microseconds % 1000000);
+            if (!memory_.write ||
+                !memory_.write(timevalAddress, &guest, sizeof(guest))) {
                 return fail(number, EFAULT, "gettimeofday guest write");
             }
             return ok(number, 0, "gettimeofday");
+        }
+        case 199: {
+            const int guestFd = static_cast<int>(state.r[0]);
+            const auto file = guestFiles_.find(guestFd);
+            if (file == guestFiles_.end()) return fail(number, EBADF, "lseek guest fd");
+
+            // ARM AAPCS aligns the off_t argument to r2:r3 after the fd in r0.
+            // The following int argument is therefore passed at the current SP.
+            uint32_t whenceWord = 0;
+            if (!memory_.read ||
+                !memory_.read(state.r[13], &whenceWord, sizeof(whenceWord))) {
+                return fail(number, EFAULT, "lseek whence stack read");
+            }
+            const int whence = static_cast<int>(whenceWord);
+            if (whence != SEEK_SET && whence != SEEK_CUR && whence != SEEK_END) {
+                return fail(number, EINVAL, "lseek whence");
+            }
+
+            const uint64_t rawOffset = static_cast<uint64_t>(state.r[2]) |
+                                       (static_cast<uint64_t>(state.r[3]) << 32u);
+            const int64_t offset = static_cast<int64_t>(rawOffset);
+            const off_t position = ::lseek(file->second.hostFd,
+                                           static_cast<off_t>(offset),
+                                           whence);
+            if (position == static_cast<off_t>(-1)) {
+                return fail(number, errno, "lseek host call");
+            }
+            return ok64(state, number, static_cast<int64_t>(position), "lseek");
         }
         case 338: {
             std::string path;
@@ -427,25 +479,29 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
             return ok(number, 0, "fstat64");
         }
         default: {
-            TrapResult r;
-            r.number = number;
-            r.detail = "unsupported BSD syscall";
-            return r;
+            TrapResult result;
+            result.number = number;
+            result.detail = "unsupported BSD syscall";
+            return result;
         }
     }
 }
 
 TrapResult DarwinSyscalls::dispatchMach(CPUState&, uint32_t number) {
     switch (number) {
-        case 26: return ok(number, 0x100, "mach_reply_port placeholder");
-        case 27: return ok(number, 0x101, "thread_self_trap placeholder");
-        case 28: return ok(number, 0x102, "task_self_trap placeholder");
-        case 29: return ok(number, 0x103, "host_self_trap placeholder");
+        case 26:
+            return ok(number, 0x100, "mach_reply_port placeholder");
+        case 27:
+            return ok(number, 0x101, "thread_self_trap placeholder");
+        case 28:
+            return ok(number, 0x102, "task_self_trap placeholder");
+        case 29:
+            return ok(number, 0x103, "host_self_trap placeholder");
         default: {
-            TrapResult r;
-            r.number = number;
-            r.detail = "unsupported Mach trap";
-            return r;
+            TrapResult result;
+            result.number = number;
+            result.detail = "unsupported Mach trap";
+            return result;
         }
     }
 }
