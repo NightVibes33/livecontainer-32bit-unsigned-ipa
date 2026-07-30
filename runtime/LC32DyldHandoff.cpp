@@ -16,18 +16,26 @@ DyldHandoffResult prepareDyldHandoff(const DyldHandoffSpec& spec,
     out.dyld = loadArmv7MachO(spec.dyldImage, spec.dyldSize, map, write, spec.dyldSlide);
     if (!out.dyld.ok) { out.error = "dyld: " + out.dyld.error; return out; }
 
+    uint32_t appHeader = spec.appSlide;
+    for (const auto& segment : out.app.segments) {
+        if (segment.fileoff == 0 && segment.filesize != 0) {
+            appHeader = segment.vmaddr;
+            break;
+        }
+    }
+
     ProcessStackSpec stack = spec.stack;
     if (stack.argv.empty()) stack.argv.push_back(spec.executablePath);
     if (stack.apple.empty()) {
         stack.apple.push_back({"executable_path", spec.executablePath});
-        stack.apple.push_back({"main_mach_header", std::to_string(spec.appSlide)});
+        stack.apple.push_back({"main_mach_header", std::to_string(appHeader)});
     }
     out.processStack = buildDarwinProcessStack(spec.stackBase, spec.stackSize, stack, write);
     if (!out.processStack.ok) { out.error = "stack: " + out.processStack.error; return out; }
 
     out.pc = out.dyld.entryPoint & ~1u;
     out.sp = out.processStack.stackPointer;
-    out.mainMachHeader = spec.appSlide;
+    out.mainMachHeader = appHeader;
     out.thumb = out.dyld.thumb || (out.dyld.entryPoint & 1u);
     out.ok = true;
     return out;
