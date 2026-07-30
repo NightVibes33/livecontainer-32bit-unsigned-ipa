@@ -17,14 +17,27 @@ namespace {
 constexpr uint32_t CPSR_C = 1u << 29;
 constexpr uint32_t kUnixTrapBase = 0x80000000u;
 constexpr uint32_t kMachTrapBase = 0xffffffe0u;
+
 constexpr uint32_t kGuestOpenAccessMode = 0x3u;
 constexpr uint32_t kGuestOpenCreate = 0x0200u;
 constexpr uint32_t kGuestOpenTruncate = 0x0400u;
 constexpr uint32_t kGuestOpenCloseExec = 0x01000000u;
+
 constexpr uint32_t kGuestFdCloseExec = 1u;
 constexpr uint32_t kFcntlGetFd = 1u;
 constexpr uint32_t kFcntlSetFd = 2u;
 constexpr uint32_t kFcntlGetFl = 3u;
+
+constexpr uint32_t kProtRead = 0x01u;
+constexpr uint32_t kProtWrite = 0x02u;
+constexpr uint32_t kProtExec = 0x04u;
+constexpr uint32_t kMapShared = 0x0001u;
+constexpr uint32_t kMapPrivate = 0x0002u;
+constexpr uint32_t kMapFixed = 0x0010u;
+constexpr uint32_t kMapJit = 0x0800u;
+constexpr uint32_t kMapAnonymous = 0x1000u;
+constexpr uint32_t kPageSize = 4096u;
+constexpr uint32_t kMaximumMapping = 64u * 1024u * 1024u;
 constexpr size_t kMaximumTransfer = 16u * 1024u * 1024u;
 
 #pragma pack(push, 4)
@@ -125,6 +138,20 @@ TrapResult fail(uint32_t number, int errorNumber, const char* detail) {
     result.number = number;
     result.detail = detail;
     return result;
+}
+
+bool addAddress(uint32_t base, uint32_t offset, uint32_t& out) {
+    if (offset > UINT32_MAX - base) return false;
+    out = base + offset;
+    return true;
+}
+
+bool alignPage(uint32_t value, uint32_t& out) {
+    const uint64_t aligned = (static_cast<uint64_t>(value) + kPageSize - 1u) &
+                             ~(static_cast<uint64_t>(kPageSize) - 1u);
+    if (aligned > UINT32_MAX) return false;
+    out = static_cast<uint32_t>(aligned);
+    return true;
 }
 } // namespace
 
@@ -416,6 +443,141 @@ TrapResult DarwinSyscalls::dispatchUnix(CPUState& state, uint32_t number) {
                 return fail(number, EFAULT, "gettimeofday guest write");
             }
             return ok(number, 0, "gettimeofday");
+        }
+        case 197: {
+            const uint32_t requestedAddress = state.r[0];
+            const uint32_t length = state.r[1];
+            const uint32_t protection = state.r[2];
+            const uint32_t flags = state.r[3];
+
+            if (length == 0 || length > kMaximumMapping) {
+                return fail(number, EINVAL, "mmap length");
+            }
+            if ((protection & ~(kProtRead | kProtWrite | kProtExec)) != 0) {
+                return fail(number, EINVAL, "mmap protection");
+            }
+            if ((flags & kMapFixed) != 0) {
+                return fail(number, EINVAL, "mmap MAP_FIXED blocked");
+            }
+            if ((flags & kMapJit) != 0) {
+                return fail(number, EPERM, "mmap MAP_JIT blocked");
+            }
+            const uint32_t sharing = flags & (kMapShared | kMapPrivate);
+            if (sharing != kMapShared && sharing != kMapPrivate) {
+                return fail(number, EINVAL, "mmap sharing mode");
+            }
+            const uint32_t supportedFlags =
+                kMapShared | kMapPrivate | kMapAnonymous;
+            if ((flags & ~supportedFlags) != 0) {
+                return fail(number, EINVAL, "mmap flags");
+            }
+            if (!memory_.map || !memory_.write || !memory_.read) {
+                return fail(number, ENOMEM, "mmap memory callbacks");
+            }
+
+            uint32_t stackFdAddress = 0;
+            uint32_t stackOffsetLowAddress = 0;
+            uint32_t stackOffsetHighAddress = 0;
+            if (!addAddress(state.r[13], 0u, stackFdAddress) ||
+                !addAddress(state.r[13], 8u, stackOffsetLowAddress) ||
+                !addAddress(state.r[13], 12u, stackOffsetHighAddress)) {
+                return fail(number, EFAULT, "mmap stack address");
+            }
+
+            uint32_t fdWord = 0;
+            uint32_t offsetLow = 0;
+            uint32_t offsetHigh = 0;
+            if (!memory_.read(stackFdAddress, &fdWord, sizeof(fdWord)) ||
+                !memory_.read(stackOffsetLowAddress, &offsetLow, sizeof(offsetLow)) ||
+                !memory_.read(stackOffsetHighAddress, &offsetHigh, sizeof(offsetHigh))) {
+                return fail(number, EFAULT, "mmap stack read");
+            }
+
+            const int guestFd = static_cast<int32_t>(fdWord);
+            const uint64_t rawOffset = static_cast<uint64_t>(offsetLow) |
+                                       (static_cast<uint64_t>(offsetHigh) << 32u);
+            const int64_t offset = static_cast<int64_t>(rawOffset);
+            if (offset < 0 || (rawOffset & (kPageSize - 1u)) != 0) {
+                return fail(number, EINVAL, "mmap offset");
+            }
+
+            const bool anonymous = (flags & kMapAnonymous) != 0;
+            const GuestFile* file = nullptr;
+            if (anonymous) {
+                if (guestFd != -1) return fail(number, EINVAL, "mmap anonymous fd");
+            } else {
+                if ((protection & kProtWrite) != 0) {
+                    return fail(number, EROFS, "mmap writable file blocked");
+                }
+                const auto found = guestFiles_.find(guestFd);
+                if (found == guestFiles_.end()) return fail(number, EBADF, "mmap guest fd");
+                file = &found->second;
+            }
+
+            uint32_t mappedLength = 0;
+            if (!alignPage(length, mappedLength) || mappedLength == 0) {
+                return fail(number, EINVAL, "mmap aligned length");
+            }
+
+            std::vector<uint8_t> contents(length, 0);
+            if (file != nullptr) {
+                size_t completed = 0;
+                while (completed < contents.size()) {
+                    const ssize_t bytes = ::pread(
+                        file->hostFd,
+                        contents.data() + completed,
+                        contents.size() - completed,
+                        static_cast<off_t>(offset + static_cast<int64_t>(completed)));
+                    if (bytes < 0) {
+                        if (errno == EINTR) continue;
+                        return fail(number, errno, "mmap pread");
+                    }
+                    if (bytes == 0) break;
+                    completed += static_cast<size_t>(bytes);
+                }
+            }
+
+            uint32_t mappingAddress = 0;
+            bool mapped = false;
+            if (requestedAddress != 0) {
+                if ((requestedAddress & (kPageSize - 1u)) != 0) {
+                    return fail(number, EINVAL, "mmap address alignment");
+                }
+                mapped = memory_.map(requestedAddress, mappedLength, protection);
+                if (mapped) mappingAddress = requestedAddress;
+            }
+
+            if (!mapped) {
+                uint32_t candidate = nextMmapAddress_;
+                if ((candidate & (kPageSize - 1u)) != 0 &&
+                    !alignPage(candidate, candidate)) {
+                    return fail(number, ENOMEM, "mmap address overflow");
+                }
+                for (uint32_t attempt = 0; attempt < 4096u; ++attempt) {
+                    const uint64_t end = static_cast<uint64_t>(candidate) + mappedLength;
+                    if (end > 0x100000000ull) break;
+                    if (memory_.map(candidate, mappedLength, protection)) {
+                        mappingAddress = candidate;
+                        mapped = true;
+                        break;
+                    }
+                    if (end + kPageSize > 0x100000000ull) break;
+                    candidate = static_cast<uint32_t>(end + kPageSize);
+                }
+            }
+
+            if (!mapped) return fail(number, ENOMEM, "mmap guest allocation");
+            if (!contents.empty() &&
+                !memory_.write(mappingAddress, contents.data(), contents.size())) {
+                return fail(number, EFAULT, "mmap guest write");
+            }
+
+            const uint64_t next = static_cast<uint64_t>(mappingAddress) +
+                                  mappedLength + kPageSize;
+            nextMmapAddress_ = next < 0x100000000ull
+                                   ? static_cast<uint32_t>(next)
+                                   : 0x50000000u;
+            return ok(number, static_cast<int32_t>(mappingAddress), "mmap");
         }
         case 199: {
             const int guestFd = static_cast<int>(state.r[0]);
