@@ -361,7 +361,7 @@ int main() {
     uint32_t hostInfoCount = 0;
     uint32_t maxCpus = 0;
     uint32_t availableCpus = 0;
-    uint32_t memorySize = 0;
+    uint32_t hostMemorySize = 0;
     uint32_t cpuType = 0;
     uint32_t cpuSubtype = 0;
     std::memcpy(&migReplyId, lowMemory.data() + kMachMessageAddress + 20u, 4u);
@@ -369,12 +369,12 @@ int main() {
     std::memcpy(&hostInfoCount, lowMemory.data() + kMachMessageAddress + 36u, 4u);
     std::memcpy(&maxCpus, lowMemory.data() + kMachMessageAddress + 40u, 4u);
     std::memcpy(&availableCpus, lowMemory.data() + kMachMessageAddress + 44u, 4u);
-    std::memcpy(&memorySize, lowMemory.data() + kMachMessageAddress + 48u, 4u);
+    std::memcpy(&hostMemorySize, lowMemory.data() + kMachMessageAddress + 48u, 4u);
     std::memcpy(&cpuType, lowMemory.data() + kMachMessageAddress + 52u, 4u);
     std::memcpy(&cpuSubtype, lowMemory.data() + kMachMessageAddress + 56u, 4u);
     assert(migReplyId == 300u && migReturn == 0u && hostInfoCount == 12u);
     assert(maxCpus == 2u && availableCpus == 2u);
-    assert(memorySize == 1024u * 1024u * 1024u);
+    assert(hostMemorySize == 1024u * 1024u * 1024u);
     assert(cpuType == 12u && cpuSubtype == 9u);
 
     char rootTemplate[] = "/tmp/lc32-syscalls-XXXXXX";
