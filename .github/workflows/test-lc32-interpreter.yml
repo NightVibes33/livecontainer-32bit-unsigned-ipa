@@ -62,6 +62,10 @@ jobs:
         run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachODependencies.cpp runtime/LC32GuestPathResolver.cpp runtime/LC32DependencyLoadPlan.cpp runtime/tests/LC32DependencyLoadPlanTests.cpp -o lc32-dependency-load-plan-tests
       - name: Run recursive dependency load-plan tests
         run: ./lc32-dependency-load-plan-tests
+      - name: Build dependency image mapper tests
+        run: c++ -std=c++17 -Wall -Wextra -Werror runtime/LC32MachOLoader.cpp runtime/LC32DependencyMapper.cpp runtime/tests/LC32DependencyMapperTests.cpp -o lc32-dependency-mapper-tests
+      - name: Run dependency image mapper tests
+        run: ./lc32-dependency-mapper-tests
       - name: Build dyld boot execution tests
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror \
