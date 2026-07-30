@@ -60,7 +60,9 @@ private:
     bool write(uint32_t address, const void* data, std::size_t size);
     void event(DyldBootResult& out, std::string stage, std::string detail = {}, uint32_t value = 0);
     bool dispatchSupervisorCall(DyldBootResult& out, const Result& stop, DarwinSyscalls& syscalls);
-    DyldBootResult executePrepared(DyldBootResult out, uint64_t maxSteps);
+    DyldBootResult executePrepared(DyldBootResult out,
+                                   uint64_t maxSteps,
+                                   std::string syscallGuestRoot = {});
     DyldBootResult bootImpl(const DyldHandoffSpec& spec,
                             const GuestPathContext* auditContext,
                             const GuestPathExists* exists,
