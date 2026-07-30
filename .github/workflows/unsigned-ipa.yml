@@ -35,7 +35,17 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
+          ref: 467edd814ba4a52f5785e6c10518b73be26b2259
           path: build/LiveExec32
+
+      - name: Patch integrated 32-bit runtime
+        run: |
+          set -euxo pipefail
+          python3 scripts/patch_livecontainer_32bit_host.py LiveContainer/LCBootstrap.m
+          python3 scripts/patch_liveexec32.py build/LiveExec32
+          grep -q 'Starting LiveExec32 without the legacy host JIT gate' LiveContainer/LCBootstrap.m
+          grep -q 'LC32_RUNTIME_ROOT_MISSING' build/LiveExec32/main.cpp
+          ! grep -q 'JIT is required to run 32-bit apps through LiveExec32' LiveContainer/LCBootstrap.m
 
       - name: Prepare Theos
         run: |
@@ -182,6 +192,14 @@ jobs:
             echo "missing ARMv7 dlopen reroute marker in packaged IPA" >&2
             exit 1
           fi
+          if ! grep -R -a -q 'Starting LiveExec32 without the legacy host JIT gate' ipa-check/Payload/LiveContainer.app; then
+            echo "missing direct LiveExec32 launch marker in packaged IPA" >&2
+            exit 1
+          fi
+          if ! grep -R -a -q 'LC32_RUNTIME_ROOT_MISSING' ipa-check/Payload/LiveContainer.app/LiveExec32.app; then
+            echo "missing patched LiveExec32 runtime diagnostics" >&2
+            exit 1
+          fi
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' ipa-check/Payload/LiveContainer.app/Info.plist
@@ -203,7 +221,7 @@ jobs:
           gh release create unsigned-latest "$OUTPUT_IPA" \
             --target "$GITHUB_SHA" \
             --title "Latest unsigned IPA" \
-            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes bundled LiveExec32.app." \
+            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes the patched integrated LiveExec32 runtime." \
             --latest
 
       - name: Update AltStore source
