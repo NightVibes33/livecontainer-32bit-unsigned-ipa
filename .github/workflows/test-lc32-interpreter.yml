@@ -49,3 +49,15 @@ jobs:
             -o lc32-darwin-syscall-tests
       - name: Run Darwin syscall tests
         run: ./lc32-darwin-syscall-tests
+      - name: Build no-JIT ARMv7 boot-session tests
+        run: |
+          set -euxo pipefail
+          c++ -std=c++17 -Wall -Wextra -Werror \
+            runtime/LC32Interpreter.cpp \
+            runtime/LC32MachOLoader.cpp \
+            runtime/LC32DarwinSyscalls.cpp \
+            runtime/LC32BootSession.cpp \
+            runtime/tests/LC32BootSessionTests.cpp \
+            -o lc32-boot-session-tests
+      - name: Run no-JIT ARMv7 boot-session tests
+        run: ./lc32-boot-session-tests
