@@ -1,0 +1,127 @@
+name: Scan iOSObscura Batch 1000 Against Current LC32
+
+on:
+  push:
+    branches: [feature/liveexec32-fixitfelix]
+    paths:
+      - '.github/workflows/iosobscura-batch-1000.yml'
+      - 'runtime/LC32VirtualRuntime.hpp'
+      - 'runtime/LC32PluginMain.cpp'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: iosobscura-batch-1000-current-lc32
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+      build_run: ${{ steps.build.outputs.run_id }}
+    steps:
+      - id: matrix
+        run: python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          print('value=' + json.dumps({'shard': list(range(40))}, separators=(',', ':')))
+          PY
+      - id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 120); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/unsigned-ipa.yml/runs?head_sha=$GITHUB_SHA&per_page=20" > runs.json
+            read -r RUN_ID FAILED_ID < <(python3 - <<'PY'
+          import json
+          runs=json.load(open('runs.json')).get('workflow_runs',[])
+          print(next((str(r['id']) for r in runs if r.get('conclusion')=='success'), ''),
+                next((str(r['id']) for r in runs if r.get('status')=='completed' and r.get('conclusion')!='success'), ''))
+          PY
+            )
+            if [ -n "$RUN_ID" ]; then echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"; exit 0; fi
+            if [ -n "$FAILED_ID" ]; then echo "Exact app build failed: $FAILED_ID" >&2; exit 1; fi
+            sleep 15
+          done
+          echo 'Timed out waiting for exact unsigned IPA build' >&2
+          exit 1
+
+  scan:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download exact app build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p current-app
+          gh run download '${{ needs.prepare.outputs.build_run }}' --repo "$GITHUB_REPOSITORY" --name LiveContainer-unsigned-ipa --dir current-app
+          LC_IPA=$(find current-app -type f -iname '*.ipa' -print -quit)
+          test -n "$LC_IPA"
+          echo "LC_IPA=$LC_IPA" >> "$GITHUB_ENV"
+      - name: Validate archive shard
+        run: |
+          set -o pipefail
+          python3 tools/iosobscura-github-batch.py --authorized --download \
+            --start-index 1000 --batch-size 1000 \
+            --shard-index '${{ matrix.shard }}' --shard-count 40 \
+            --max-bytes 2147483648 --livecontainer-ipa "$LC_IPA" \
+            --output-dir 'campaign-output/shard-${{ matrix.shard }}' \
+            2>&1 | tee 'campaign-output/shard-${{ matrix.shard }}.log'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iosobscura-current-lc32-1000-shard-${{ matrix.shard }}
+          path: campaign-output
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 9
+
+  aggregate:
+    needs: [prepare, scan]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: iosobscura-current-lc32-1000-shard-*
+          path: shards
+      - name: Merge batch
+        run: |
+          python3 - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          rows=[]
+          for p in Path('shards').rglob('results.jsonl'):
+              for line in p.read_text(errors='replace').splitlines():
+                  try: rows.append(json.loads(line))
+                  except json.JSONDecodeError: pass
+          rows.sort(key=lambda r:r.get('globalIndex',10**12))
+          result=Counter(r.get('result','error') for r in rows)
+          failures=Counter(x for r in rows for x in r.get('failures',[]))
+          deps=Counter(x for r in rows for x in set(r.get('dependencies') or []))
+          out=Path('batch-1000'); out.mkdir()
+          summary={'startIndex':1000,'requested':1000,'processed':len(rows),'nextIndex':2000,
+                   'resultCounts':dict(result),'topFailures':failures.most_common(100),
+                   'topDependencies':deps.most_common(250),
+                   'scope':'static/package compatibility against exact current LC32 build'}
+          (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          (out/'results.jsonl').write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows))
+          print(json.dumps(summary,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iosobscura-current-lc32-batch-1000
+          path: batch-1000
+          retention-days: 90
