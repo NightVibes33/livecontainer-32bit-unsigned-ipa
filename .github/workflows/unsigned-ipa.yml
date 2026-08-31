@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '10'
+      LIVEEXEC32_BUILD_REVISION: '11'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -214,6 +214,7 @@ jobs:
           python3 .github/scripts/patch-liveexec32-uikit.py
           python3 .github/scripts/patch-liveexec32-corefoundation.py
           python3 .github/scripts/patch-liveexec32-security.py
+          python3 .github/scripts/patch-liveexec32-gamekit.py
           gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
@@ -240,6 +241,8 @@ jobs:
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSChineseCalendar$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSLocaleCurrencySymbol$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/Security.framework/Security" | grep ' _kSecAttrAccessibleWhenUnlocked$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/GameKit.framework/GameKit" | grep ' _GKErrorDomain$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/GameKit.framework/GameKit" | grep ' _GKPlayerAuthenticationDidChangeNotificationName$'
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
