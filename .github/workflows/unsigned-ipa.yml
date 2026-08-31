@@ -85,8 +85,11 @@ jobs:
           file "$LIVEEXEC_APP/LiveExec32"
 
       - name: Build LiveContainer without signing
+        id: build_host
+        continue-on-error: true
         run: |
-          set -euxo pipefail
+          set +e
+          mkdir -p build
           xcodebuild build \
             -project LiveContainer.xcodeproj \
             -scheme LiveContainer \
@@ -98,7 +101,29 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            > build/xcodebuild.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          grep -nE '(^|[[:space:]])error:|fatal error:|BUILD FAILED|The following build commands failed|ld: ' build/xcodebuild.log | tail -200 || true
+          if [ "$status" -ne 0 ]; then
+            echo '--- xcodebuild tail ---'
+            tail -120 build/xcodebuild.log
+          fi
+          exit "$status"
+
+      - name: Upload xcodebuild diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: LiveContainer-xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop after host build failure
+        if: steps.build_host.outcome == 'failure'
+        run: exit 1
 
       - name: Package combined unsigned IPA
         run: |
@@ -115,8 +140,6 @@ jobs:
           rm -rf Payload/LiveContainer.app/LiveExec32.app
           ditto "$LIVEEXEC_APP" Payload/LiveContainer.app/LiveExec32.app
 
-          # Leave the deliverable genuinely unsigned. SideStore/AltStore can sign
-          # the host and nested emulator together at install time.
           find Payload -type d -name '_CodeSignature' -prune -exec rm -rf {} + || true
           find Payload -type f -name 'embedded.mobileprovision' -delete || true
 
