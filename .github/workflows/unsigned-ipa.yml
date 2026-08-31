@@ -213,6 +213,7 @@ jobs:
           gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
+          bash .github/scripts/build-guest-libiconv.sh build/LiveExec32/Resources/RootFS
           gmake -C build/LiveExec32 package
 
           LIVEEXEC_IPA=$(find build/LiveExec32/packages -maxdepth 1 -type f -name '*.ipa' -print -quit)
@@ -228,6 +229,8 @@ jobs:
           LIVEEXEC_SHARED="$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH"
           test -f "$LIVEEXEC_SHARED"
           test -d "$LIVEEXEC_APP/RootFS"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           file "$LIVEEXEC_APP/LiveExec32"
           file "$LIVEEXEC_SHARED"
           otool -hv "$LIVEEXEC_SHARED" | grep -q DYLIB
@@ -331,6 +334,8 @@ jobs:
           test -f "$EMU/Info.plist"
           test -f "$SHARED"
           test -d "$EMU/RootFS"
+          test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
+          test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
