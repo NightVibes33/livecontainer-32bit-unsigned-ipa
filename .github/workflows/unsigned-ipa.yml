@@ -354,7 +354,7 @@ jobs:
           test -f "$SHARED"
           test -d "$EMU/RootFS"
           nm -gU "$EMU/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCATransition$'
-          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
+          nm -gU "$EMU/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
