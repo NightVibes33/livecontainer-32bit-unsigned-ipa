@@ -27,7 +27,8 @@ tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
       --disable-static \
       --enable-shared
 )
-gmake -C "$SOURCE" -j"$(sysctl -n hw.logicalcpu)"
+gmake -C "$SOURCE/libcharset/lib" -j"$(sysctl -n hw.logicalcpu)"
+gmake -C "$SOURCE/lib" -j"$(sysctl -n hw.logicalcpu)"
 
 install -d -m 0755 "$ROOTFS/usr/lib"
 install -m 0755 "$SOURCE/lib/.libs/libiconv.2.dylib" \
