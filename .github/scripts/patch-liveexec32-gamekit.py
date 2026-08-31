@@ -7,8 +7,8 @@ if source.count(anchor) != 1:
     raise SystemExit("expected exactly one GameKit import anchor")
 constants = """
 
-NSString * const GKErrorDomain = @"GKErrorDomain";
-NSString * const GKPlayerAuthenticationDidChangeNotificationName =
+NSString *GKErrorDomain = @"GKErrorDomain";
+NSString *GKPlayerAuthenticationDidChangeNotificationName =
     @"GKPlayerAuthenticationDidChangeNotificationName";
 """
 path.write_text(source.replace(anchor, anchor + constants))
