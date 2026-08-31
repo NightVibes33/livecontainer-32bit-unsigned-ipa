@@ -18,7 +18,8 @@
 #import "Tweaks/Tweaks.h"
 #include <mach-o/ldsyms.h>
 
-static int (*appMain)(int, char**);
+extern char **environ;
+static int (*appMain)(int, char**, char**);
 static bool lcExecPathOverwriteSucceeded = false;
 NSUserDefaults *lcUserDefaults;
 NSUserDefaults *lcSharedDefaults;
@@ -181,7 +182,7 @@ static BOOL checkJITEnabled() {
         return YES;
     }
     // check if jailbroken
-    if (access("/var/mobile", R_OK) == 0) {
+    if (access("/usr/lib/systemhook.dylib", R_OK) == 0) {
         return YES;
     }
     
@@ -672,7 +673,6 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
-#if is32BitSupported
     bool metadataSays32Bit = [guestAppInfo[@"is32bit"] boolValue];
     bool is32bit = metadataSays32Bit;
     bool detectedRequires32BitLayer = false;
@@ -692,6 +692,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     } else {
         NSLog(@"[LCBootstrap] Architecture inspection failed; retaining cached is32bit=%d.", metadataSays32Bit);
     }
+
     if(is32bit) {
         if (!isJitEnabled) {
             isJitEnabled = waitForJITEnabled(80, 1000 * 100);
@@ -700,42 +701,40 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
             }
         }
         if (!isJitEnabled) {
-            return @"JIT is required to run 32-bit apps through LiveExec32.";
+            return @"JIT is required to run 32-bit apps.";
         }
-        
-        NSString *selected32BitLayerExecPath = nil;
-        NSString *resolveError = nil;
-        NSString *selected32BitLayerPath = LCResolve32BitLayerPath(docPath, [lcUserDefaults stringForKey:@"selected32BitLayer"], &selected32BitLayerExecPath, &resolveError);
-        if(!selected32BitLayerPath || !selected32BitLayerExecPath) {
-            appError = resolveError ?: @"Unable to resolve LiveExec32.app.";
+
+        NSString *selected32BitLayer = guestAppInfo[@"selected32BitEmulator"] ?: [lcSharedDefaults stringForKey:@"LCSelected32BitEmulator"];
+        if(selected32BitLayer.length == 0) {
+            selected32BitLayer = @"LiveExec32.app";
+            NSLog(@"[LCBootstrap] No emulator selected; using bundled LiveExec32.app.");
+        }
+
+        NSBundle *selected32bitLayerBundle = [NSBundle bundleWithPath:[NSString stringWithFormat:@"%@/Applications/%@", docPath, selected32BitLayer]];
+        if(!selected32bitLayerBundle) {
+            selected32bitLayerBundle = [NSBundle bundleWithPath:[NSString stringWithFormat:@"%@/Applications/%@", appGroupFolder.path, selected32BitLayer]];
+        }
+        if(!selected32bitLayerBundle && [selected32BitLayer.lastPathComponent isEqualToString:@"LiveExec32.app"]) {
+            NSString *bundledLiveExec32Path = [LCMainAppBundlePath() stringByAppendingPathComponent:@"LiveExec32.app"];
+            selected32bitLayerBundle = [NSBundle bundleWithPath:bundledLiveExec32Path];
+        }
+        if(!selected32bitLayerBundle || !selected32bitLayerBundle.executablePath) {
+            appError = @"The specified 32-bit emulator app is not found";
             NSLog(@"[LCBootstrap] %@", appError);
             *path = oldPath;
             return appError;
         }
-        NSLog(@"[LCBootstrap] Using 32-bit translation layer at %@", selected32BitLayerPath);
-        appExecPath = strdup(selected32BitLayerExecPath.UTF8String);
+        appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+        overwriteExecPath(appExecPath);
     }
-#endif
+
     if(![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;
     }
     
     // Preload executable to bypass RT_NOLOAD
     appMainImageIndex = _dyld_image_count();
-#if is32BitSupported
-    LCClearDlopen32BitLayerReroute();
-#endif
     void *appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
-#if is32BitSupported
-    if(!is32bit && LCWasDlopenReroutedTo32BitLayer()) {
-        const char *rerouted32BitLayerPath = LCLastDlopen32BitLayerPath();
-        if(rerouted32BitLayerPath) {
-            NSLog(@"[LCBootstrap] dlopen_nolock rerouted ARMv7 guest through LiveExec32.");
-            appExecPath = strdup(rerouted32BitLayerPath);
-            is32bit = true;
-        }
-    }
-#endif
     appExecutableHandle = appHandle;
     const char *dlerr = dlerror();
     
@@ -804,11 +803,11 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     if(!is32bit) {
 #endif
         argv[0] = (char *)appExecPath;
-        ret = appMain(argc, argv);
+        ret = appMain(argc, argv, environ);
 #if is32BitSupported
     } else {
         char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
-        ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32);
+        ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
     }
 #endif
     return [NSString stringWithFormat:@"App returned from its main function with code %d.", ret];

@@ -213,7 +213,7 @@ Add links:
 - Use ChOma instead of custom MachO parser
 
 ## License
-[Apache License 2.0](https://github.com/khanhduytran0/LiveContainer/blob/main/LICENSE)
+[GNU Affero General Public License v3.0](https://github.com/LiveContainer/LiveContainer/blob/main/LICENSE)
 
 ## Credits
 - [xpn's blogpost: Restoring Dyld Memory Loading](https://blog.xpnsec.com/restoring-dyld-memory-loading)
