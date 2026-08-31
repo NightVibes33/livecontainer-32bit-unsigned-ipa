@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 
-path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("build/LiveExec32/dynarmic.cpp")
+path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("build/LiveExec32/HostFrameworks/LC32/dynarmic.cpp")
 source = path.read_text()
 
 marker = "#define MACH_MSG_UNION(function, name) \\\n"
