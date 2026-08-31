@@ -31,7 +31,6 @@ jobs:
 
           BASE_SHA=$(git rev-parse HEAD)
           export BASE_SHA
-          echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
 
           git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/LiveContainer/LiveContainer.git
@@ -52,7 +51,7 @@ jobs:
             printf 'Resolving %s merge conflicts\n' "${#conflicts[@]}"
             for f in "${conflicts[@]}"; do
               case "$f" in
-                LiveContainer/LCBootstrap.m|.github/workflows/unsigned-ipa.yml|scripts/*|README.md|apps.json|.github/apps.json|.github/apps_nightly.json|.github/apps_ss_lc.json)
+                LiveContainer/LCBootstrap.m|.github/workflows/*|scripts/*|README.md|apps.json|.github/apps.json|.github/apps_nightly.json|.github/apps_ss_lc.json)
                   git checkout --ours -- "$f"
                   ;;
                 *)
@@ -64,7 +63,6 @@ jobs:
           fi
 
           git checkout "$BASE_SHA" -- LiveContainer/LCBootstrap.m
-          git checkout "$BASE_SHA" -- .github/workflows/unsigned-ipa.yml
           git checkout "$BASE_SHA" -- scripts/patch_liveexec32.py
           git checkout "$BASE_SHA" -- scripts/patch_livecontainer_32bit_2026.py
 
@@ -85,6 +83,8 @@ jobs:
           print('preserved bundle identifiers:', old)
           PY
 
+          # Patch host code only; workflow YAML is restored before the commit and
+          # updated separately through the GitHub connector, which has workflow-write access.
           python3 scripts/patch_livecontainer_32bit_2026.py
 
           grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
@@ -92,8 +92,10 @@ jobs:
           grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'LCSelected32BitEmulator' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
           test -f Resources/universal.js
-          grep -q 'LC32BitTranslationLayer bool true' .github/workflows/unsigned-ipa.yml
-          grep -q '467edd814ba4a52f5785e6c10518b73be26b2259' .github/workflows/unsigned-ipa.yml
+
+          # GitHub Actions' GITHUB_TOKEN cannot push workflow-file changes here.
+          # Restore every workflow to the branch's pre-sync state before committing.
+          git checkout "$BASE_SHA" -- .github/workflows
 
           git add -A
           git status --short
