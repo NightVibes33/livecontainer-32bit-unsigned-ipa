@@ -70,9 +70,19 @@ jobs:
 
           if [ -f build/LiveExec32/lib/libdynarmic.dylib ]; then
             cp build/LiveExec32/lib/libdynarmic.dylib "$LIVEEXEC_APP/"
-            install_name_tool -id '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/libdynarmic.dylib" || true
-            install_name_tool -change libdynarmic.dylib '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change '@rpath/libdynarmic.dylib' '@executable_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+            install_name_tool -id '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/libdynarmic.dylib"
+            install_name_tool -change '/var/jb/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+            install_name_tool -change '/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+            install_name_tool -change 'libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+            install_name_tool -change '@rpath/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
+          fi
+
+          test -f "$LIVEEXEC_APP/libdynarmic.dylib"
+          otool -L "$LIVEEXEC_APP/LiveExec32"
+          otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
+          if otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '/var/jb/'; then
+            echo 'LiveExec32 still contains a jailbreak-only dylib dependency' >&2
+            exit 1
           fi
 
           /usr/libexec/PlistBuddy -c 'Delete :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
@@ -159,11 +169,19 @@ jobs:
           test -f "$HOST/LiveContainer"
           test -f "$EMU/LiveExec32"
           test -f "$EMU/Info.plist"
+          test -f "$EMU/libdynarmic.dylib"
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HOST/Info.plist")" = "com.nightvibes33.livecontainer"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
+          otool -L "$EMU/LiveExec32"
+          otool -L "$EMU/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
+          if otool -L "$EMU/LiveExec32" | grep -Fq '/var/jb/'; then
+            echo 'Packaged LiveExec32 still contains a jailbreak-only dylib dependency' >&2
+            exit 1
+          fi
           grep -q 'bundled32BitEmulatorName = "LiveExec32.app"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           grep -q 'LCSelected32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           grep -q 'selected32BitEmulator' LiveContainer/LCBootstrap.m
