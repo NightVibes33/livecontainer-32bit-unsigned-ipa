@@ -7,7 +7,7 @@ ARCHIVE="$RUNNER_TEMP/libiconv-$VERSION.tar.gz"
 SOURCE="$RUNNER_TEMP/libiconv-$VERSION"
 URL="https://ftp.gnu.org/pub/gnu/libiconv/libiconv-$VERSION.tar.gz"
 SHA256=8f74213b56238c85a50a5329f77e06198771e70dd9a739779f4c02f65d971313
-SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+SDKROOT=$(cd build/LiveExec32/tmp/iPhoneOS10.3.sdk && pwd)
 CC=$(xcrun --sdk iphoneos --find clang)
 
 curl --fail --location --retry 3 --output "$ARCHIVE" "$URL"
