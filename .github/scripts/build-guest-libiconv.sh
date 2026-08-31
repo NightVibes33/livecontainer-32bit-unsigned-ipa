@@ -28,6 +28,7 @@ tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
       --enable-shared
 )
 gmake -C "$SOURCE/libcharset/lib" -j"$(sysctl -n hw.logicalcpu)"
+install -m 0644 "$SOURCE/libcharset/include/localcharset.h" "$SOURCE/include/localcharset.h"
 gmake -C "$SOURCE/lib" -j"$(sysctl -n hw.logicalcpu)"
 
 install -d -m 0755 "$ROOTFS/usr/lib"
