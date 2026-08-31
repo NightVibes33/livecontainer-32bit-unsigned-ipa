@@ -3,6 +3,7 @@ name: Build Fresh 32-bit LiveContainer
 on:
   push:
     branches:
+      - main
       - fresh-32bit-upstream-2026-08-30
   workflow_dispatch:
 
