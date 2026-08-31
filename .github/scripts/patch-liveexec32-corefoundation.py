@@ -5,10 +5,7 @@ source = path.read_text()
 anchor = 'NSString * const NSGenericException = @"NSGenericException";'
 if source.count(anchor) != 1:
     raise SystemExit("expected exactly one CoreFoundation Foundation-spellings anchor")
-locale_constants = """__attribute__((weak)) NSString * const NSLocaleIdentifier = @"identifier";
-__attribute__((weak)) NSString * const NSLocaleLanguageCode = @"language code";
-__attribute__((weak)) NSString * const NSLocaleCountryCode = @"country code";
-__attribute__((weak)) NSString * const NSLocaleScriptCode = @"script code";
+locale_constants = """__attribute__((weak)) NSString * const NSLocaleScriptCode = @"script code";
 __attribute__((weak)) NSString * const NSLocaleVariantCode = @"variant code";
 __attribute__((weak)) NSString * const NSLocaleExemplarCharacterSet = @"exemplar character set";
 __attribute__((weak)) NSString * const NSLocaleCalendar = @"calendar";
@@ -18,7 +15,6 @@ __attribute__((weak)) NSString * const NSLocaleMeasurementSystem = @"measurement
 __attribute__((weak)) NSString * const NSLocaleDecimalSeparator = @"decimal separator";
 __attribute__((weak)) NSString * const NSLocaleGroupingSeparator = @"grouping separator";
 __attribute__((weak)) NSString * const NSLocaleCurrencySymbol = @"currency symbol";
-__attribute__((weak)) NSString * const NSLocaleCurrencyCode = @"currency code";
 __attribute__((weak)) NSString * const NSLocaleCollatorIdentifier = @"collator identifier";
 __attribute__((weak)) NSString * const NSLocaleQuotationBeginDelimiterKey = @"quotation begin delimiter";
 __attribute__((weak)) NSString * const NSLocaleQuotationEndDelimiterKey = @"quotation end delimiter";
