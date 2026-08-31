@@ -12,12 +12,15 @@ permissions:
 
 jobs:
   build:
-    name: Build clean LiveContainer + LiveExec32 IPA
-    runs-on: macos-latest
+    name: Build LiveContainer + current LiveExec32 runtime
+    runs-on: macos-26
+    timeout-minutes: 90
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
-      LIVEEXEC32_SHA: 467edd814ba4a52f5785e6c10518b73be26b2259
-      LIVEEXEC32_BUILD_REVISION: '2'
+      LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
+      LIVEEXEC32_BUILD_REVISION: '3'
+      LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+      LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
       OUTPUT_IPA: LiveContainer-32bit-fresh-unsigned.ipa
 
@@ -27,65 +30,208 @@ jobs:
         with:
           xcode-version: '26.2'
 
-      - name: Checkout fresh branch
+      - name: Checkout LiveContainer
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Verify clean upstream integration base
+      - name: Verify integration base
         run: |
           set -euxo pipefail
           grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
           grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'seedBundled32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'bundled32BitEmulatorRevision = "2"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          test ! -e scripts/patch_livecontainer_32bit_host.py
-          test ! -e scripts/patch_liveexec32.py
-          test ! -e .github/build-triggers/architecture-metadata-fix-20260730.txt
+          grep -q "bundled32BitEmulatorCommit = \"$LIVEEXEC32_SHA\"" LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q "bundled32BitEmulatorRevision = \"$LIVEEXEC32_BUILD_REVISION\"" LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
 
-      - name: Checkout LiveExec32 upstream
+      - name: Patch LiveContainer 32-bit framework loader
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('LiveContainer/LCBootstrap.m')
+          source = path.read_text()
+
+          replacements = [
+              (
+                  '''    const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
+              *path = appExecPath;
+              overwriteExecPath(appExecPath);''',
+                  '''    const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
+              NSString *emulatorLauncherPath = nil;
+              NSString *emulatorEntrySymbol = nil;
+              *path = appExecPath;
+              overwriteExecPath(appExecPath);'''
+              ),
+              (
+                  '''        // maybe need to save selected32bitLayerBundle to static variable?
+                  appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+                  overwriteExecPath(appExecPath);''',
+                  '''        emulatorLauncherPath = selected32bitLayerBundle.executablePath;
+                  NSString *emulatorLoadPath = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorLoadPath"];
+                  emulatorEntrySymbol = selected32bitLayerBundle.infoDictionary[@"LC32BitEmulatorEntrySymbol"];
+                  if(emulatorLoadPath.length > 0 && emulatorEntrySymbol.length > 0) {
+                      NSString *resolvedLoadPath = [selected32bitLayerBundle.bundlePath stringByAppendingPathComponent:emulatorLoadPath];
+                      if(![fm fileExistsAtPath:resolvedLoadPath]) {
+                          appError = [NSString stringWithFormat:@"32-bit emulator load image is missing: %@", resolvedLoadPath];
+                          NSLog(@"[LCBootstrap] %@", appError);
+                          *path = oldPath;
+                          return appError;
+                      }
+                      appExecPath = strdup(resolvedLoadPath.fileSystemRepresentation);
+                      overwriteExecPath(emulatorLauncherPath.fileSystemRepresentation);
+                  } else {
+                      appExecPath = strdup(selected32bitLayerBundle.executablePath.fileSystemRepresentation);
+                      overwriteExecPath(appExecPath);
+                  }'''
+              ),
+              (
+                  '''    void (^dlopenBlock)(void) = ^{
+                  appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
+              };''',
+                  '''    int appDlopenFlags = (is32bit && emulatorEntrySymbol.length > 0)
+                  ? (RTLD_NOW | RTLD_GLOBAL)
+                  : (RTLD_LAZY | RTLD_GLOBAL | RTLD_FIRST);
+              void (^dlopenBlock)(void) = ^{
+                  appHandle = dlopen_nolock(appExecPath, appDlopenFlags);
+              };'''
+              ),
+              (
+                  '''    // Find main()
+              appMain = getAppEntryPoint(appHandle);
+              if (!appMain) {
+                  appError = @"Could not find the main entry point";
+                  NSLog(@"[LCBootstrap] %@", appError);
+                  *path = oldPath;
+                  return appError;
+              }''',
+                  '''    // Find the emulator's exported entry point, or the normal app main().
+              if(is32bit && emulatorEntrySymbol.length > 0) {
+                  dlerror();
+                  appMain = (int (*)(int, char **, char **))dlsym(appHandle, emulatorEntrySymbol.UTF8String);
+                  const char *entryError = dlerror();
+                  if(entryError != NULL) {
+                      appError = [NSString stringWithFormat:@"Could not resolve 32-bit emulator entry point %@: %s", emulatorEntrySymbol, entryError];
+                      NSLog(@"[LCBootstrap] %@", appError);
+                      *path = oldPath;
+                      return appError;
+                  }
+              } else {
+                  appMain = getAppEntryPoint(appHandle);
+              }
+              if (!appMain) {
+                  appError = @"Could not find the main entry point";
+                  NSLog(@"[LCBootstrap] %@", appError);
+                  *path = oldPath;
+                  return appError;
+              }'''
+              ),
+              (
+                  '''    } else {
+                  char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
+                  ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
+              }''',
+                  '''    } else {
+                  const char *emulatorArgv0 = emulatorLauncherPath.length > 0
+                      ? emulatorLauncherPath.fileSystemRepresentation
+                      : appExecPath;
+                  char *argv32[] = {(char*)emulatorArgv0, (char*)*path, NULL};
+                  ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
+              }'''
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in source:
+                  raise SystemExit(f'expected loader source block not found:\n{old}')
+              source = source.replace(old, new, 1)
+
+          path.write_text(source)
+          PY
+
+          grep -q 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
+          grep -q 'LC32BitEmulatorEntrySymbol' LiveContainer/LCBootstrap.m
+          grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
+          grep -q 'emulatorLauncherPath.fileSystemRepresentation' LiveContainer/LCBootstrap.m
+
+      - name: Checkout LiveExec32 dev runtime
         uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
           ref: ${{ env.LIVEEXEC32_SHA }}
           path: build/LiveExec32
+          submodules: recursive
+          persist-credentials: false
 
-      - name: Prepare Theos
+      - name: Restore extracted guest ramdisk
+        id: ramdisk-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
+          key: lc32-ramdisk-v1-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
+
+      - name: Install LiveExec32 build dependencies
+        shell: bash
         run: |
           set -euxo pipefail
-          brew install ldid
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          brew install make boost ldid
 
-      - name: Build LiveExec32 emulator
-        env:
-          THEOS: ${{ runner.temp }}/theos
+          THEOS="$RUNNER_TEMP/theos"
+          THEOS_COMMIT=5280bd038207e14f8bd76f5417aa2fe641c03228
+          git init "$THEOS"
+          git -C "$THEOS" remote add origin https://github.com/theos/theos.git
+          git -C "$THEOS" fetch --depth 1 origin "$THEOS_COMMIT"
+          git -C "$THEOS" checkout --detach FETCH_HEAD
+          git -C "$THEOS" submodule update --init --recursive --depth 1
+
+          SDK_ARCHIVE="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+          curl --fail --location --retry 3 --output "$SDK_ARCHIVE" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo "5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  $SDK_ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$THEOS/sdks"
+          tar -xJf "$SDK_ARCHIVE" -C "$THEOS/sdks"
+          test -f "$THEOS/sdks/iPhoneOS16.5.sdk/SDKSettings.plist"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+
+          PZB_ARCHIVE="$RUNNER_TEMP/pzb.zip"
+          PZB_ROOT="$RUNNER_TEMP/pzb"
+          TOOLS_DIR="$RUNNER_TEMP/lc32-tools"
+          curl --fail --location --retry 3 --output "$PZB_ARCHIVE" \
+            https://github.com/tihmstar/partialZipBrowser/releases/download/44/buildroot_macos-latest.zip
+          echo "f72452e5c9c1248b8c4b4967a357b03addbe98d61ba8bad286ef0146dfdccdd2  $PZB_ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$PZB_ROOT" "$TOOLS_DIR"
+          unzip -q "$PZB_ARCHIVE" -d "$PZB_ROOT"
+          install -m 0755 "$PZB_ROOT/buildroot_macos-latest/usr/local/bin/pzb" "$TOOLS_DIR/pzb"
+          echo "$TOOLS_DIR" >> "$GITHUB_PATH"
+
+      - name: Build current LiveExec32 app and guest root filesystem
+        shell: bash
         run: |
           set -euxo pipefail
-          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' build/LiveExec32/Makefile
-          make -C build/LiveExec32 clean
-          make -C build/LiveExec32
+          gmake -C build/LiveExec32/GuestMakefile generate-shims
+          gmake -C build/LiveExec32/GuestMakefile
+          (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
+          gmake -C build/LiveExec32 package
 
-          LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name 'LiveExec32.app' -print -quit)
+          LIVEEXEC_IPA=$(find build/LiveExec32/packages -maxdepth 1 -type f -name '*.ipa' -print -quit)
+          test -n "$LIVEEXEC_IPA"
+          rm -rf build/liveexec-package
+          mkdir -p build/liveexec-package
+          unzip -q "$LIVEEXEC_IPA" -d build/liveexec-package
+          LIVEEXEC_APP=$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)
           test -n "$LIVEEXEC_APP"
           test -f "$LIVEEXEC_APP/LiveExec32"
           test -f "$LIVEEXEC_APP/Info.plist"
 
-          if [ -f build/LiveExec32/lib/libdynarmic.dylib ]; then
-            cp build/LiveExec32/lib/libdynarmic.dylib "$LIVEEXEC_APP/"
-            install_name_tool -id '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/libdynarmic.dylib"
-            install_name_tool -change '/var/jb/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change '/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change 'libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change '@rpath/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-          fi
-
-          test -f "$LIVEEXEC_APP/libdynarmic.dylib"
-          otool -L "$LIVEEXEC_APP/LiveExec32"
-          otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
-          if otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '/var/jb/'; then
-            echo 'LiveExec32 still contains a jailbreak-only dylib dependency' >&2
-            exit 1
-          fi
+          LIVEEXEC_SHARED="$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH"
+          test -f "$LIVEEXEC_SHARED"
+          test -d "$LIVEEXEC_APP/RootFS"
+          file "$LIVEEXEC_APP/LiveExec32"
+          file "$LIVEEXEC_SHARED"
+          otool -hv "$LIVEEXEC_SHARED" | grep -q DYLIB
+          nm -gU "$LIVEEXEC_SHARED" | grep -q '_LC32RunGuest'
 
           /usr/libexec/PlistBuddy -c 'Delete :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c 'Add :LC32BitTranslationLayer bool true' "$LIVEEXEC_APP/Info.plist"
@@ -93,12 +239,20 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :LCBundledSourceCommit string $LIVEEXEC32_SHA" "$LIVEEXEC_APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Delete :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC32_BUILD_REVISION" "$LIVEEXEC_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Delete :LC32BitEmulatorLoadPath' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :LC32BitEmulatorLoadPath string $LIVEEXEC32_LOAD_PATH" "$LIVEEXEC_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Delete :LC32BitEmulatorEntrySymbol' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :LC32BitEmulatorEntrySymbol string $LIVEEXEC32_ENTRY_SYMBOL" "$LIVEEXEC_APP/Info.plist"
 
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
-          /usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$LIVEEXEC_APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist"
-          file "$LIVEEXEC_APP/LiveExec32"
+          echo "LIVEEXEC_SHARED=$LIVEEXEC_SHARED" >> "$GITHUB_ENV"
+
+      - name: Save extracted guest ramdisk
+        if: steps.ramdisk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
+          key: lc32-ramdisk-v1-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
 
       - name: Build LiveContainer without signing
         id: build_host
@@ -158,9 +312,9 @@ jobs:
 
           find Payload -type d -name '_CodeSignature' -prune -exec rm -rf {} + || true
           find Payload -type f -name 'embedded.mobileprovision' -delete || true
-
           chmod +x Payload/LiveContainer.app/LiveContainer
           chmod +x Payload/LiveContainer.app/LiveExec32.app/LiveExec32
+          chmod +x "Payload/LiveContainer.app/LiveExec32.app/$LIVEEXEC32_LOAD_PATH"
           ditto -c -k --sequesterRsrc --keepParent Payload "$OUTPUT_IPA"
 
       - name: Verify combined IPA contract
@@ -171,10 +325,12 @@ jobs:
 
           HOST=ipa-check/Payload/LiveContainer.app
           EMU="$HOST/LiveExec32.app"
+          SHARED="$EMU/$LIVEEXEC32_LOAD_PATH"
           test -f "$HOST/LiveContainer"
           test -f "$EMU/LiveExec32"
           test -f "$EMU/Info.plist"
-          test -f "$EMU/libdynarmic.dylib"
+          test -f "$SHARED"
+          test -d "$EMU/RootFS"
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
@@ -182,18 +338,18 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
-          otool -L "$EMU/LiveExec32"
-          otool -L "$EMU/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
-          if otool -L "$EMU/LiveExec32" | grep -Fq '/var/jb/'; then
-            echo 'Packaged LiveExec32 still contains a jailbreak-only dylib dependency' >&2
-            exit 1
-          fi
-          grep -q 'bundled32BitEmulatorName = "LiveExec32.app"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'LCSelected32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'selected32BitEmulator' LiveContainer/LCBootstrap.m
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$EMU/Info.plist")" = "$LIVEEXEC32_LOAD_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$EMU/Info.plist")" = "$LIVEEXEC32_ENTRY_SYMBOL"
+
+          file "$EMU/LiveExec32" | grep -q 'executable arm64'
+          otool -hv "$SHARED" | grep -q DYLIB
+          nm -gU "$SHARED" | grep -q '_LC32RunGuest'
+          grep -q 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
+          grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
 
           echo "Host architectures: $(lipo -archs "$HOST/LiveContainer")"
-          echo "Emulator architectures: $(lipo -archs "$EMU/LiveExec32")"
+          echo "LiveExec32 launcher: $(file "$EMU/LiveExec32")"
+          echo "LiveExec32 shared runtime: $(file "$SHARED")"
           ls -lh "$OUTPUT_IPA"
 
       - name: Upload unsigned IPA
