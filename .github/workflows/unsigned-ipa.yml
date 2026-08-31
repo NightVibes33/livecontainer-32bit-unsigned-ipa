@@ -237,7 +237,7 @@ jobs:
           test -f "$LIVEEXEC_SHARED"
           test -d "$LIVEEXEC_APP/RootFS"
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCATransition$'
-          nm -gU "/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _UIKeyboardCenterBeginUserInfoKey$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _UIKeyboardCenterEndUserInfoKey$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSBuddhistCalendar$'
@@ -354,7 +354,7 @@ jobs:
           test -f "$SHARED"
           test -d "$EMU/RootFS"
           nm -gU "$EMU/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCATransition$'
-          nm -gU "/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/QuartzCore.framework/QuartzCore" | grep ' _kCAFilterNearest$'
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
