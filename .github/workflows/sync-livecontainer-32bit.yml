@@ -30,6 +30,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           BASE_SHA=$(git rev-parse HEAD)
+          export BASE_SHA
           echo "BASE_SHA=$BASE_SHA" >> "$GITHUB_ENV"
 
           git remote remove upstream 2>/dev/null || true
@@ -62,14 +63,11 @@ jobs:
             done
           fi
 
-          # Keep the known-good local bootstrap hardening and packaging workflow,
-          # then adapt them to the current upstream 32-bit emulator contract.
           git checkout "$BASE_SHA" -- LiveContainer/LCBootstrap.m
           git checkout "$BASE_SHA" -- .github/workflows/unsigned-ipa.yml
           git checkout "$BASE_SHA" -- scripts/patch_liveexec32.py
           git checkout "$BASE_SHA" -- scripts/patch_livecontainer_32bit_2026.py
 
-          # Preserve this fork's bundle identifiers while accepting upstream project changes.
           python3 - <<'PY'
           import os, pathlib, re, subprocess
           base = os.environ['BASE_SHA']
