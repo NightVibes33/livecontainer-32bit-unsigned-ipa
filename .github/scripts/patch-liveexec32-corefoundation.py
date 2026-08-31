@@ -5,8 +5,7 @@ source = path.read_text()
 anchor = 'NSString * const NSGenericException = @"NSGenericException";'
 if source.count(anchor) != 1:
     raise SystemExit("expected exactly one CoreFoundation Foundation-spellings anchor")
-calendar_constants = """NSString * const NSGregorianCalendar = @"gregorian";
-NSString * const NSBuddhistCalendar = @"buddhist";
+calendar_constants = """NSString * const NSBuddhistCalendar = @"buddhist";
 NSString * const NSChineseCalendar = @"chinese";
 NSString * const NSHebrewCalendar = @"hebrew";
 NSString * const NSIslamicCalendar = @"islamic";
