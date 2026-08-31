@@ -10,15 +10,6 @@ static uint32_t rnd32(uint32_t v, uint32_t r) {
     return (v + r) & ~r;
 }
 
-static bool LCMachOIs64BitHeader(const struct mach_header_64 *header) {
-    uint32_t magic = *(const uint32_t *)header;
-    return magic == MH_MAGIC_64 || magic == MH_CIGAM_64;
-}
-
-static struct load_command *LCMachOFirstLoadCommand(struct mach_header_64 *header) {
-    return (struct load_command *)((uint8_t *)header + (LCMachOIs64BitHeader(header) ? sizeof(struct mach_header_64) : sizeof(struct mach_header)));
-}
-
 struct dyld_all_image_infos *_alt_dyld_get_all_image_infos(void) {
     static struct dyld_all_image_infos *result;
     if (result) {
@@ -258,7 +249,8 @@ NSString *LCParseMachO(const char *path, bool readOnly, LCParseMachOCallback cal
         struct fat_header *header = (struct fat_header *)map;
         struct fat_arch *arch = (struct fat_arch *)(map + sizeof(struct fat_header));
         for (int i = 0; i < OSSwapInt32(header->nfat_arch); i++) {
-            if (OSSwapInt32(arch->cputype) == CPU_TYPE_ARM64) {
+            int cputype = OSSwapInt32(arch->cputype);
+            if (cputype == CPU_TYPE_ARM64 || cputype == CPU_TYPE_ARM) {
                 callback(path, (struct mach_header_64 *)(map + OSSwapInt32(arch->offset)), fd, map);
             }
             arch = (struct fat_arch *)((void *)arch + sizeof(struct fat_arch));
@@ -329,7 +321,7 @@ void LCPatchAppBundleFixupARM64eSlice(NSURL *bundleURL) {
 }
 
 void LCChangeMachOUUID(struct mach_header_64 *header) {
-    struct load_command *command = LCMachOFirstLoadCommand(header);
+    struct load_command *command = (struct load_command *)(header + 1);
     for(int i = 0; i < header->ncmds; i++) {
         if(command->cmd == LC_UUID) {
             struct uuid_command *uuidCmd = (struct uuid_command *)command;
@@ -345,7 +337,7 @@ const uint8_t* LCGetMachOUUID(struct mach_header_64 *header) {
     if (!header) return NULL;
     if(*(uint32_t*)header != 0x646c7964) { // dyld
         // Find load commands
-        const struct load_command* command = LCMachOFirstLoadCommand(header);
+        const struct load_command* command = (const struct load_command*)(header + 1);
         
         // Iterate through load commands to find LC_SYMTAB
         for(uint32_t i = 0; i < header->ncmds; i++) {
@@ -362,7 +354,8 @@ const uint8_t* LCGetMachOUUID(struct mach_header_64 *header) {
 }
 
 bool LCIsMachOEncrypted(struct mach_header_64 *header) {
-    struct load_command *command = LCMachOFirstLoadCommand(header);
+    size_t size = header->cputype==CPU_TYPE_ARM64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header);
+    struct load_command *command = (struct load_command *)((uint64_t)header + size);
     for(int i = 0; i < header->ncmds; i++) {
         if(command->cmd == LC_ENCRYPTION_INFO || command->cmd == LC_ENCRYPTION_INFO_64) {
             return ((struct encryption_info_command *)command)->cryptid != 0;
@@ -388,9 +381,7 @@ uint64_t LCFindSymbolOffset(const char *basePath, const char *symbol) {
             offset = (uint64_t)result - (uint64_t)header;
         }
     });
-    if(offset == 0) {
-        NSLog(@"[LCMachOUtils] Failed to find symbol %s in %s", symbol, path);
-    }
+    NSCAssert(offset != 0, @"Failed to find symbol %s in %s", symbol, path);
     return offset;
 }
 
@@ -410,12 +401,11 @@ mach_header_u *LCGetLoadedImageHeader(int i0, const char* name) {
 __attribute__((constructor))
 #endif
 void *getDyldBase(void) {
-    struct dyld_all_image_infos *infos = _alt_dyld_get_all_image_infos();
-    if(!infos || !infos->dyldImageLoadAddress) {
-        NSLog(@"[LCMachOUtils] dyld base not found");
-        return NULL;
-    }
-    void *dyldBase = (void *)infos->dyldImageLoadAddress;
+    static void *dyldBase = 0;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dyldBase = (void *)_alt_dyld_get_all_image_infos()->dyldImageLoadAddress;
+    });
 #if !TARGET_OS_SIMULATOR
     return dyldBase;
 #else
@@ -471,7 +461,7 @@ struct ui_CS_blob {
 
 
 struct code_signature_command* findSignatureCommand(struct mach_header_64* header) {
-    uint8_t *imageHeaderPtr = (uint8_t*)LCMachOFirstLoadCommand(header);
+    uint8_t *imageHeaderPtr = (uint8_t*)header + sizeof(struct mach_header_64);
     struct load_command *command = (struct load_command *)imageHeaderPtr;
     struct code_signature_command* codeSignCommand = 0;
     for(int i = 0; i < header->ncmds; i++) {

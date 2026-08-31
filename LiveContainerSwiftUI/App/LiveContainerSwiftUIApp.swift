@@ -9,9 +9,46 @@ import SwiftUI
 @main
 struct LiveContainerSwiftUIApp : SwiftUI.App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
-    @State var appDataFolderNames: [String]
-    @State var tweakFolderNames: [String]
+
+    private static let bundled32BitEmulatorName = "LiveExec32.app"
+    private static let bundled32BitEmulatorCommit = "467edd814ba4a52f5785e6c10518b73be26b2259"
+
+    private static func seedBundled32BitEmulator(using fm: FileManager) throws {
+        let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
+        guard fm.fileExists(atPath: bundledURL.path) else {
+            return
+        }
+
+        let bundledInfoURL = bundledURL.appendingPathComponent("Info.plist")
+        guard
+            let bundledInfo = NSDictionary(contentsOf: bundledInfoURL),
+            bundledInfo["LC32BitTranslationLayer"] as? Bool == true
+        else {
+            NSLog("[LC32] Ignoring bundled LiveExec32 because LC32BitTranslationLayer is missing")
+            return
+        }
+
+        try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
+        let installedURL = LCPath.bundlePath.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
+        let installedInfoURL = installedURL.appendingPathComponent("Info.plist")
+        let installedInfo = NSDictionary(contentsOf: installedInfoURL)
+        let installedCommit = installedInfo?["LCBundledSourceCommit"] as? String
+
+        if installedCommit != bundled32BitEmulatorCommit {
+            if fm.fileExists(atPath: installedURL.path) {
+                try fm.removeItem(at: installedURL)
+            }
+            try fm.copyItem(at: bundledURL, to: installedURL)
+            NSLog("[LC32] Seeded bundled LiveExec32 emulator at %@", installedURL.path)
+        }
+
+        let sharedDefaults = LCUtils.appGroupUserDefault
+        let selected = sharedDefaults.string(forKey: "LCSelected32BitEmulator") ?? ""
+        if selected.isEmpty {
+            sharedDefaults.set(bundled32BitEmulatorName, forKey: "LCSelected32BitEmulator")
+            NSLog("[LC32] Selected bundled LiveExec32 as the default 32-bit emulator")
+        }
+    }
     
     init() {
         let fm = FileManager()
@@ -19,10 +56,13 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         var tempTweakFolderNames : [String] = []
         
         var tempApps: [LCAppModel] = []
+        var tempArm32EmuApps: [LCAppModel] = []
         var tempHiddenApps: [LCAppModel] = []
         var tempURLSchemes: Set<String>? = DataManager.shared.model.multiLCStatus != 2 ? Set() : nil
 
         do {
+            try Self.seedBundled32BitEmulator(using: fm)
+
             // load apps
             try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
             let appDirs = try fm.contentsOfDirectory(atPath: LCPath.bundlePath.path)
@@ -33,11 +73,15 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                 let newApp = LCAppInfo(bundlePath: "\(LCPath.bundlePath.path)/\(appDir)")!
                 newApp.relativeBundlePath = appDir
                 newApp.isShared = false
+                let model = LCAppModel(appInfo: newApp)
                 if newApp.isHidden {
-                    tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                    tempHiddenApps.append(model)
                 } else {
-                    tempApps.append(LCAppModel(appInfo: newApp))
+                    tempApps.append(model)
                     tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                }
+                if newApp.is32bitEmulator {
+                    tempArm32EmuApps.append(model)
                 }
             }
             if LCPath.lcGroupDocPath != LCPath.docPath {
@@ -50,11 +94,15 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
                     let newApp = LCAppInfo(bundlePath: "\(LCPath.lcGroupBundlePath.path)/\(appDir)")!
                     newApp.relativeBundlePath = appDir
                     newApp.isShared = true
+                    let model = LCAppModel(appInfo: newApp)
                     if newApp.isHidden {
-                        tempHiddenApps.append(LCAppModel(appInfo: newApp))
+                        tempHiddenApps.append(model)
                     } else {
-                        tempApps.append(LCAppModel(appInfo: newApp))
+                        tempApps.append(model)
                         tempURLSchemes?.formUnion(newApp.urlSchemes() as! [String])
+                    }
+                    if newApp.is32bitEmulator {
+                        tempArm32EmuApps.append(model)
                     }
                 }
             }
@@ -85,18 +133,18 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         }
         
         DataManager.shared.model.apps = tempApps
+        DataManager.shared.model.arm32EmuApps = tempArm32EmuApps
         DataManager.shared.model.hiddenApps = tempHiddenApps
+        DataManager.shared.model.appDataFolderNames = tempAppDataFolderNames
+        DataManager.shared.model.tweakFolderNames = tempTweakFolderNames
         if let tempURLSchemes {
             UserDefaults.lcShared().set(Array(tempURLSchemes), forKey: "LCGuestURLSchemes")
         }
-        
-        _appDataFolderNames = State(initialValue: tempAppDataFolderNames)
-        _tweakFolderNames = State(initialValue: tempTweakFolderNames)
     }
     
     var body: some Scene {
         WindowGroup(id: "Main") {
-            LCTabView(appDataFolderNames: $appDataFolderNames, tweakFolderNames: $tweakFolderNames)
+            LCTabView()
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .environmentObject(DataManager.shared.model)
                 .environmentObject(LCAppSortManager.shared)

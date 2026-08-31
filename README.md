@@ -116,24 +116,6 @@ Unfortunately, not all apps work in LiveContainer, so we have a [compatibility l
 ## Building
 Open Xcode, edit `DEVELOPMENT_TEAM[config=Debug]` in `xcconfigs/Global.xcconfig` to your team id and compile.
 
-### Experimental 32-bit IPA translation
-This fork enables LiveContainer's guarded `is32BitSupported` path. 32-bit IPAs are detected during install and launched through the bundled `LiveExec32.app` translation layer when JIT is available.
-
-The unsigned IPA built by this fork includes `LiveExec32.app` inside `LiveContainer.app`. On first 32-bit launch, LiveContainer copies the bundled helper into its Documents folder automatically and uses that default copy. Advanced users can still override the helper by setting Developer Settings > `Custom LiveExec32 .app path`; the helper script `tools/stage-liveexec32-layer.sh` remains available for custom builds.
-
-This is not native iOS 32-bit support. LiveExec32 is still experimental and its upstream README notes that full app support still needs Objective-C class, object, and method proxying between the 32-bit guest and 64-bit host.
-
-The `Build Unsigned IPA` GitHub Actions workflow builds a real-device `iphoneos` app with code signing disabled, strips local signing metadata, and uploads `LiveContainer-unsigned.ipa` for import into SideStore or AltStore. Pushes to `main` also publish the latest IPA release and update the AltStore source automatically.
-
-This fork uses bundle identifier `com.nightvibes33.livecontainer32`, with matching keychain access groups, so it installs separately from upstream LiveContainer and avoids identity collisions when testing LiveContainer inside LiveContainer.
-
-AltStore/SideStore source URL:
-`https://raw.githubusercontent.com/NightVibes33/livecontainer-32bit-unsigned-ipa/main/apps.json`
-
-Add links:
-- AltStore: `altstore://source?url=https%3A%2F%2Fraw.githubusercontent.com%2FNightVibes33%2Flivecontainer-32bit-unsigned-ipa%2Fmain%2Fapps.json`
-- SideStore: `sidestore://source?url=https%3A%2F%2Fraw.githubusercontent.com%2FNightVibes33%2Flivecontainer-32bit-unsigned-ipa%2Fmain%2Fapps.json`
-
 ## Project structure
 ### Main executable
 - Core of LiveContainer
@@ -213,7 +195,7 @@ Add links:
 - Use ChOma instead of custom MachO parser
 
 ## License
-[Apache License 2.0](https://github.com/khanhduytran0/LiveContainer/blob/main/LICENSE)
+[GNU Affero General Public License v3.0](https://github.com/LiveContainer/LiveContainer/blob/main/LICENSE)
 
 ## Credits
 - [xpn's blogpost: Restoring Dyld Memory Loading](https://blog.xpnsec.com/restoring-dyld-memory-loading)

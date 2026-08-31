@@ -34,14 +34,14 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.7.13</string>
+	<string>3.8.8</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.nightvibes33.livecontainer32.urlscheme</string>
+			<string>com.kdt.livecontainer.urlscheme</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>livecontainer</string>
@@ -49,7 +49,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>3.8.2</string>
+	<string>3.8.8</string>
 	<key>GCSupportedGameControllers</key>
 	<array>
 		<dict>
@@ -80,6 +80,8 @@
 	<true/>
 	<key>NFCReaderUsageDescription</key>
 	<string>The guest app is requesting for this permission.</string>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>The guest app is requesting for this permission.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -95,6 +97,7 @@
 	<string>The guest app is requesting for this permission.</string>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_FC9F5ED42C8A._tcp</string>
 		<string>_airplay._tcp</string>
 		<string>_raop._tcp</string>
 		<string>_companion-link._tcp</string>

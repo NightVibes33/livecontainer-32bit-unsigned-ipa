@@ -3,6 +3,7 @@
 @import UIKit;
 @import UniformTypeIdentifiers;
 @import Security;
+#import <IOKit/IOKitLib.h>
 
 #import "LCUtils.h"
 #import "../../LiveContainer/LCSharedUtils.h"
@@ -46,7 +47,7 @@
     }
     
     // in LC2, attempt to guess LC1's LiveProcess extension
-    NSString *bundleID = [NSString stringWithFormat:@"com.nightvibes33.livecontainer32.%@.LiveProcess", LCSharedUtils.teamIdentifier];
+    NSString *bundleID = [NSString stringWithFormat:@"com.kdt.livecontainer.%@.LiveProcess", LCSharedUtils.teamIdentifier];
     if([NSExtension extensionWithIdentifier:bundleID error:nil]) {
         return bundleID;
     }
@@ -182,6 +183,31 @@
     return ans;
 }
 
+#pragma mark JIT
+
++ (BOOL)isTXMScriptRequired {
+    if (@available(iOS 19.0, *)) {
+        // https://github.com/opa334/Dopamine/commit/e8438b4a64ead3997d2c70a575431cb1b4070fb9
+        io_registry_entry_t memory_map = IORegistryEntryFromPath(0, "IODeviceTree:/chosen/memory-map");
+        if (memory_map == IO_OBJECT_NULL)
+            return NO;
+        NSArray *keys = (__bridge NSArray *)IORegistryEntryCreateCFProperty(memory_map, CFSTR(kIORegistryEntryPropertyKeysKey), 0, 0);
+        IOObjectRelease(memory_map);
+        return keys && [keys containsObject:@"TXM"];
+    }
+    return NO;
+}
+
++ (NSString *)base64EncodedUniversalJITScript {
+    static dispatch_once_t onceToken;
+    static NSString *script;
+    dispatch_once(&onceToken, ^{
+        NSData *data = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"universal" ofType:@"js"]];
+        script = [data base64EncodedStringWithOptions:0];
+    });
+    return script;
+}
+
 #pragma mark Setup
 
 + (Store) store {
@@ -223,7 +249,7 @@
 }
 
 + (void)changeMainExecutableTo:(NSString *)exec error:(NSError **)error {
-    NSURL *infoPath = [LCSharedUtils.appGroupPath URLByAppendingPathComponent:@"Apps/com.nightvibes33.livecontainer32/App.app/Info.plist"];
+    NSURL *infoPath = [LCSharedUtils.appGroupPath URLByAppendingPathComponent:@"Apps/com.kdt.livecontainer/App.app/Info.plist"];
     NSMutableDictionary *infoDict = [NSMutableDictionary dictionaryWithContentsOfURL:infoPath];
     if (!infoDict) return;
 
@@ -395,6 +421,7 @@
     [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"PlugIns"] error:nil];
     // remove all sidestore stuff
     if([NSUserDefaults sideStoreExist]) {
+        [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStoreSupport.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStore.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Frameworks/SideStoreApp.framework"] error:nil];
         [manager removeItemAtURL:[appBundlePath URLByAppendingPathComponent:@"Intents.intentdefinition"] error:nil];
