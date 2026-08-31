@@ -42,7 +42,7 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
             NSLog("[LC32] Seeded bundled LiveExec32 emulator at %@", installedURL.path)
         }
 
-        let sharedDefaults = UserDefaults.lcShared()
+        let sharedDefaults = LCUtils.appGroupUserDefault
         let selected = sharedDefaults.string(forKey: "LCSelected32BitEmulator") ?? ""
         if selected.isEmpty {
             sharedDefaults.set(bundled32BitEmulatorName, forKey: "LCSelected32BitEmulator")
