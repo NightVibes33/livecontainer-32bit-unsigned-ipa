@@ -102,7 +102,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            GCC_PREPROCESSOR_DEFINITIONS='$(inherited) is32BitSupported=1' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) is32BitSupported'
 
       - name: Package unsigned IPA
         run: |
