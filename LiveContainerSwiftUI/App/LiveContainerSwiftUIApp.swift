@@ -163,8 +163,7 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         if UIApplication.shared.supportsMultipleScenes, #available(iOS 16.1, *) {
             WindowGroup(id: "appView", for: String.self) { $id in
                 if let id {
-                    MultitaskAppWindow(id: id) {
-                    }
+                    MultitaskAppWindow(id: id)
                 }
             }
 
