@@ -18,8 +18,8 @@
 #import "Tweaks/Tweaks.h"
 #include <mach-o/ldsyms.h>
 
-static int (*appMain)(int, char**);
-static bool lcExecPathOverwriteSucceeded = false;
+extern char **environ;
+static int (*appMain)(int, char**, char**);
 NSUserDefaults *lcUserDefaults;
 NSUserDefaults *lcSharedDefaults;
 NSString *lcAppGroupPath;
@@ -33,96 +33,6 @@ bool isLiveProcess = false;
 bool isSharedBundle = false;
 bool isSideStore = false;
 bool sideStoreExist = false;
-
-#if is32BitSupported
-static NSString * const LCDefault32BitLayerPath = @"LiveExec32.app";
-static NSString * const LCBundled32BitLayerPath = @"LiveExec32.app";
-
-static NSString *LCMainAppBundlePath(void) {
-    NSString *bundlePath = lcMainBundle.bundlePath;
-    if([bundlePath hasSuffix:@"PlugIns/LiveProcess.appex"]) {
-        bundlePath = bundlePath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
-    }
-    return bundlePath;
-}
-
-static NSBundle *LCBundleFor32BitLayer(NSString *layerPath, NSString **executablePath) {
-    NSBundle *bundle = [NSBundle bundleWithPath:layerPath];
-    if(!bundle) {
-        return nil;
-    }
-    NSString *execPath = bundle.executablePath;
-    if(!execPath || ![NSFileManager.defaultManager fileExistsAtPath:execPath]) {
-        return nil;
-    }
-    if(executablePath) {
-        *executablePath = execPath;
-    }
-    return bundle;
-}
-
-static NSString *LCResolve32BitLayerPath(NSString *docPath, NSString *selected32BitLayer, NSString **executablePath, NSString **errorMessage) {
-    BOOL usesDefaultLayer = !selected32BitLayer || [selected32BitLayer length] == 0;
-    if(usesDefaultLayer) {
-        selected32BitLayer = LCDefault32BitLayerPath;
-    }
-
-    NSString *selected32BitLayerPath = [docPath stringByAppendingPathComponent:selected32BitLayer];
-    if(LCBundleFor32BitLayer(selected32BitLayerPath, executablePath)) {
-        return selected32BitLayerPath;
-    }
-
-    if(!usesDefaultLayer) {
-        if(errorMessage) {
-            *errorMessage = [NSString stringWithFormat:@"No 32-bit translation layer installed at the configured path: %@", selected32BitLayer];
-        }
-        return nil;
-    }
-
-    NSString *bundled32BitLayerPath = [LCMainAppBundlePath() stringByAppendingPathComponent:LCBundled32BitLayerPath];
-    if(!LCBundleFor32BitLayer(bundled32BitLayerPath, executablePath)) {
-        if(errorMessage) {
-            *errorMessage = @"This build does not include a valid bundled LiveExec32.app. Reinstall a build that embeds LiveExec32, or set a custom LiveExec32 .app path in Developer Settings.";
-        }
-        return nil;
-    }
-
-    NSError *copyError = nil;
-    NSString *destinationParent = selected32BitLayerPath.stringByDeletingLastPathComponent;
-    [NSFileManager.defaultManager createDirectoryAtPath:destinationParent withIntermediateDirectories:YES attributes:nil error:nil];
-    if(![NSFileManager.defaultManager fileExistsAtPath:selected32BitLayerPath] &&
-       [NSFileManager.defaultManager copyItemAtPath:bundled32BitLayerPath toPath:selected32BitLayerPath error:&copyError] &&
-       LCBundleFor32BitLayer(selected32BitLayerPath, executablePath)) {
-        return selected32BitLayerPath;
-    }
-
-    if(copyError) {
-        NSLog(@"[LCBootstrap] Failed to copy bundled LiveExec32.app to Documents: %@", copyError);
-    }
-    return bundled32BitLayerPath;
-}
-
-static bool LCDetectExecutableRequires32BitLayer(const char *execPath, bool *requires32BitLayer) {
-    if(!execPath || !requires32BitLayer) {
-        return false;
-    }
-    __block bool foundMachOSlice = false;
-    __block bool has64bitSlice = false;
-    NSString *error = LCParseMachO(execPath, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
-        foundMachOSlice = true;
-        if(header->cputype == CPU_TYPE_ARM64) {
-            has64bitSlice = true;
-        }
-    });
-    if(error || !foundMachOSlice) {
-        NSLog(@"[LCBootstrap] Failed to inspect executable architecture for %s: %@", execPath, error ?: @"no Mach-O slices found");
-        return false;
-    }
-    // A universal binary with an ARM64 slice must use LiveContainer's normal path.
-    *requires32BitLayer = !has64bitSlice;
-    return true;
-}
-#endif
 
 @implementation NSUserDefaults(LiveContainer)
 + (instancetype)lcUserDefaults {
@@ -177,29 +87,18 @@ static BOOL checkJITEnabled() {
     return YES;
 #else
     if([lcUserDefaults boolForKey:@"LCIgnoreJITOnLaunch"]) {
-        // Explicit developer override: skip the launch-time JIT gate.
-        return YES;
+        return NO;
     }
     // check if jailbroken
-    if (access("/var/mobile", R_OK) == 0) {
+    if (access("/usr/lib/systemhook.dylib", R_OK) == 0) {
         return YES;
     }
     
     // check csflags
-    int flags = 0;
+    int flags;
     csops(getpid(), 0, &flags, sizeof(flags));
     return (flags & CS_DEBUGGED) != 0;
 #endif
-}
-
-static BOOL waitForJITEnabled(int attempts, useconds_t delay) {
-    for(int i = 0; i < attempts; i++) {
-        if(checkJITEnabled()) {
-            return YES;
-        }
-        usleep(delay);
-    }
-    return checkJITEnabled();
 }
 
 static uint64_t rnd64(uint64_t v, uint64_t r) {
@@ -207,17 +106,20 @@ static uint64_t rnd64(uint64_t v, uint64_t r) {
     return (v + r) & ~r;
 }
 
-bool overwriteMainCFBundle(void) {
+void overwriteMainCFBundle(void) {
     // Overwrite CFBundleGetMainBundle
     uint32_t *pc = (uint32_t *)CFBundleGetMainBundle;
     void **mainBundleAddr = 0;
-
+    
 #if !TARGET_OS_SIMULATOR
     if(@available(iOS 27.0, *)) {
-        // iOS 27 inverted this logic; __mainBundle follows the first tbz.
-        for(int i = 0; i < 128; ++i) {
+        // at least in iOS 27.0 db1, the logic is inversed and the __mainBundle is right after the first tbz instruction
+        while (true) {
             bool isTbz = ((*pc) & 0x7F000000) == 0x36000000;
-            if(isTbz) {
+            if (isTbz) {
+                // adrp <- pc-1
+                // tbz <- pc
+                // ldr  <- addr
                 mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)(pc+1), (uint64_t)(pc-1));
                 break;
             }
@@ -225,9 +127,13 @@ bool overwriteMainCFBundle(void) {
         }
     } else {
 #endif
-        for(int i = 0; i < 128; ++i) {
+        while (true) {
             uint64_t addr = aarch64_get_tbnz_jump_address(*pc, (uint64_t)pc);
-            if(addr) {
+            if (addr) {
+                // adrp <- pc-1
+                // tbnz <- pc
+                // ...
+                // ldr  <- addr
                 mainBundleAddr = (void **)aarch64_emulate_adrp_ldr(*(pc-1), *(uint32_t *)addr, (uint64_t)(pc-1));
                 break;
             }
@@ -236,24 +142,18 @@ bool overwriteMainCFBundle(void) {
 #if !TARGET_OS_SIMULATOR
     }
 #endif
-
-    if(!mainBundleAddr) {
-        NSLog(@"[LCBootstrap] CFBundleGetMainBundle layout changed; skipping main CFBundle overwrite");
-        return false;
-    }
+    assert(mainBundleAddr != NULL);
     *mainBundleAddr = (__bridge void *)NSBundle.mainBundle._cfBundle;
-    return true;
 }
 
-bool overwriteMainNSBundle(NSBundle *newBundle) {
+void overwriteMainNSBundle(NSBundle *newBundle) {
     // Overwrite NSBundle.mainBundle
     // iOS 16: x19 is _MergedGlobals
     // iOS 17: x19 is _MergedGlobals+4
 
     NSString *oldPath = NSBundle.mainBundle.executablePath;
-    BOOL replacedMainBundle = NO;
     uint32_t *mainBundleImpl = (uint32_t *)method_getImplementation(class_getClassMethod(NSBundle.class, @selector(mainBundle)));
-    for (int i = 0; i < 20 && !replacedMainBundle; i++) {
+    for (int i = 0; i < 20; i++) {
         void **_MergedGlobals = (void **)aarch64_emulate_adrp_add(mainBundleImpl[i], mainBundleImpl[i+1], (uint64_t)&mainBundleImpl[i]);
         if (!_MergedGlobals) continue;
 
@@ -266,101 +166,73 @@ bool overwriteMainNSBundle(NSBundle *newBundle) {
         for (int mgIdx = 0; mgIdx < 20; mgIdx++) {
             if (_MergedGlobals[mgIdx] == (__bridge void *)NSBundle.mainBundle) {
                 _MergedGlobals[mgIdx] = (__bridge void *)newBundle;
-                replacedMainBundle = YES;
                 break;
             }
         }
     }
 
-    if(![NSBundle.mainBundle.executablePath isEqualToString:oldPath]) {
-        return true;
-    }
-    NSLog(@"[LCBootstrap] NSBundle.mainBundle layout changed; skipping main NSBundle overwrite");
-    return false;
+    assert(![NSBundle.mainBundle.executablePath isEqualToString:oldPath]);
 }
 
-int hook__NSGetExecutablePath_overwriteExecPath(char*** dyldApiInstancePtr, char* newPath, uint32_t* bufsize) {
-    lcExecPathOverwriteSucceeded = false;
-    if(!dyldApiInstancePtr) {
-        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook missing dyld API instance");
-        return 0;
-    }
-    char** dyldConfig = dyldApiInstancePtr[1];
-    if(!dyldConfig) {
-        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook missing dyld config");
-        return 0;
-    }
+typedef struct {
+    void *gap_0x0[2];                  // 0x00, 0x08
+    char *mainExecutablePath_old;      // 0x10
+    void *gap_0x18;                    // 0x18
+    char *mainExecutablePath_18_4;     // 0x20
+    size_t mainExecutablePathLen_27_0; // 0x28
+} DyldConfig;
+typedef struct {
+    void *gap_0x0;
+    DyldConfig *dyldConfig;
+} DyldAPI;
+
+int hook__NSGetExecutablePath_overwriteExecPath(DyldAPI* dyldApiInstancePtr, char* newPath, uint32_t* bufsize) {
+    assert(dyldApiInstancePtr != 0);
+    DyldConfig* dyldConfig = dyldApiInstancePtr->dyldConfig;
+    assert(dyldConfig != 0);
     
     char** mainExecutablePathPtr = 0;
-    // mainExecutablePath was at 0x10 for iOS 15~18.3.2 and 0x20 for iOS 18.4+.
-    // Newer dyld builds can move it again, so scan nearby config slots.
-    const int candidateIndexes[] = {2, 4, 0, 1, 3, 5, 6, 7, 8, 9, 10, 11};
-    for(size_t i = 0; i < sizeof(candidateIndexes) / sizeof(candidateIndexes[0]); ++i) {
-        int idx = candidateIndexes[i];
-        if(dyldConfig[idx] != 0 && dyldConfig[idx][0] == '/') {
-            mainExecutablePathPtr = dyldConfig + idx;
-            break;
-        }
-    }
-    if(!mainExecutablePathPtr) {
-        NSLog(@"[LCBootstrap] _NSGetExecutablePath dyld config layout changed; executable path slot not found");
-        return 0;
+    // mainExecutablePath is at 0x10 for iOS 15~18.3.2, 0x20 for iOS 18.4+
+    if(dyldConfig->mainExecutablePath_old != 0 && dyldConfig->mainExecutablePath_old[0] == '/') {
+        mainExecutablePathPtr = &(dyldConfig->mainExecutablePath_old);
+    } else if (dyldConfig->mainExecutablePath_18_4 != 0 && dyldConfig->mainExecutablePath_18_4[0] == '/') {
+        mainExecutablePathPtr = &(dyldConfig->mainExecutablePath_18_4);
+    } else {
+        assert(mainExecutablePathPtr != 0);
     }
 
-    kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)mainExecutablePathPtr, sizeof(*mainExecutablePathPtr), false, PROT_READ | PROT_WRITE);
+    kern_return_t ret = builtin_vm_protect(mach_task_self(), (mach_vm_address_t)dyldConfig, sizeof(dyldConfig), false, PROT_READ | PROT_WRITE);
     if(ret != KERN_SUCCESS) {
-        if(!os_tpro_is_supported()) {
-            NSLog(@"[LCBootstrap] _NSGetExecutablePath path overwrite vm_protect failed: %d", ret);
-            return 0;
-        }
+        assert(os_tpro_is_supported());
         os_thread_self_restrict_tpro_to_rw();
     }
     *mainExecutablePathPtr = newPath;
-    lcExecPathOverwriteSucceeded = true;
-    if(ret != KERN_SUCCESS && os_tpro_is_supported()) {
+    
+    // in iOS 27, the length is also cached, it's at +0x28
+    if(@available(iOS 27.0, *)) {
+        dyldConfig->mainExecutablePathLen_27_0 = strlen(newPath);
+    }
+    
+    if(ret != KERN_SUCCESS) {
         os_thread_self_restrict_tpro_to_ro();
     }
 
     return 0;
 }
 
-bool overwriteExecPath(const char *newExecPath) {
+void overwriteExecPath(const char *newExecPath) {
     // dyld4 stores executable path in a different place (iOS 15.0 +)
     // https://github.com/apple-oss-distributions/dyld/blob/ce1cc2088ef390df1c48a1648075bbd51c5bbc6a/dyld/DyldAPIs.cpp#L802
-    int (*orig__NSGetExecutablePath)(void* dyldPtr, char* buf, uint32_t* bufsize) = 0;
-    lcExecPathOverwriteSucceeded = false;
-    if(!performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, hook__NSGetExecutablePath_overwriteExecPath)) {
-        NSLog(@"[LCBootstrap] Unable to hook _NSGetExecutablePath; continuing without dyld executable path overwrite");
-        return false;
-    }
+    int (*orig__NSGetExecutablePath)(void* dyldPtr, char* buf, uint32_t* bufsize);
+    performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, hook__NSGetExecutablePath_overwriteExecPath);
     _NSGetExecutablePath((char*)newExecPath, NULL);
-    bool overwritten = lcExecPathOverwriteSucceeded;
     // put the original function back
-    if(orig__NSGetExecutablePath) {
-        if(!performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, orig__NSGetExecutablePath)) {
-            NSLog(@"[LCBootstrap] Failed to restore _NSGetExecutablePath hook");
-        }
-    } else {
-        NSLog(@"[LCBootstrap] Original _NSGetExecutablePath pointer was not captured");
-    }
-    if(!overwritten) {
-        NSLog(@"[LCBootstrap] _NSGetExecutablePath hook did not overwrite executable path");
-    }
-    return overwritten;
+    performHookDyldApi("_NSGetExecutablePath", 2, (void**)&orig__NSGetExecutablePath, orig__NSGetExecutablePath);
 }
 
 static void *getAppEntryPoint(void *handle) {
-    (void)handle;
-    uint64_t entryoff = 0;
+    uint32_t entryoff = 0;
     const struct mach_header_64 *header = (struct mach_header_64 *)getGuestAppHeader();
-    if(!header) {
-        NSLog(@"[LCBootstrap] Guest app image header was not found");
-        return NULL;
-    }
-    if(header->magic != MH_MAGIC_64 && header->magic != MH_CIGAM_64) {
-        NSLog(@"[LCBootstrap] Guest app image header is not a 64-bit Mach-O: 0x%x", header->magic);
-        return NULL;
-    }
     uint8_t *imageHeaderPtr = (uint8_t*)header + sizeof(struct mach_header_64);
     struct load_command *command = (struct load_command *)imageHeaderPtr;
     for(int i = 0; i < header->ncmds; ++i) {
@@ -372,10 +244,7 @@ static void *getAppEntryPoint(void *handle) {
         imageHeaderPtr += command->cmdsize;
         command = (struct load_command *)imageHeaderPtr;
     }
-    if(entryoff == 0) {
-        NSLog(@"[LCBootstrap] Guest app LC_MAIN entry point was not found");
-        return NULL;
-    }
+    assert(entryoff > 0);
     return (void *)header + entryoff;
 }
 
@@ -508,9 +377,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     // Overwrite @executable_path
     const char *appExecPath = appBundle.executablePath.fileSystemRepresentation;
     *path = appExecPath;
-    if(!overwriteExecPath(appExecPath)) {
-        NSLog(@"[LCBootstrap] Continuing after executable path overwrite fallback");
-    }
+    overwriteExecPath(appExecPath);
     
     // Overwrite NSUserDefaults
     if([guestAppInfo[@"doUseLCBundleId"] boolValue]) {
@@ -620,14 +487,10 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     [LCSharedUtils setContainerUsingByLC:lcAppUrlScheme folderName:dataUUID auditToken:0];
 
     // Overwrite NSBundle
-    if(!overwriteMainNSBundle(appBundle)) {
-        NSLog(@"[LCBootstrap] Continuing after NSBundle.mainBundle overwrite fallback");
-    }
+    overwriteMainNSBundle(appBundle);
 
     // Overwrite CFBundle
-    if(!overwriteMainCFBundle()) {
-        NSLog(@"[LCBootstrap] Continuing after CFBundleGetMainBundle overwrite fallback");
-    }
+    overwriteMainCFBundle();
 
     // Overwrite executable info
     if(!appBundle.executablePath) {
@@ -672,70 +535,52 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         }
     }
     
-#if is32BitSupported
-    bool metadataSays32Bit = [guestAppInfo[@"is32bit"] boolValue];
-    bool is32bit = metadataSays32Bit;
-    bool detectedRequires32BitLayer = false;
-    if(LCDetectExecutableRequires32BitLayer(appExecPath, &detectedRequires32BitLayer)) {
-        is32bit = detectedRequires32BitLayer;
-        if(metadataSays32Bit != is32bit) {
-            NSLog(@"[LCBootstrap] Correcting stale is32bit metadata (%d -> %d) for %s.", metadataSays32Bit, is32bit, appExecPath);
-            NSMutableDictionary *repairedAppInfo = [guestAppInfo mutableCopy];
-            repairedAppInfo[@"is32bit"] = @(is32bit);
-            NSString *appInfoPath = [bundlePath stringByAppendingPathComponent:@"LCAppInfo.plist"];
-            if([repairedAppInfo writeBinToFile:appInfoPath atomically:YES]) {
-                guestAppInfo = repairedAppInfo;
-            } else {
-                NSLog(@"[LCBootstrap] Failed to persist repaired architecture metadata at %@.", appInfoPath);
-            }
-        }
-    } else {
-        NSLog(@"[LCBootstrap] Architecture inspection failed; retaining cached is32bit=%d.", metadataSays32Bit);
-    }
+    bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
     if(is32bit) {
         if (!isJitEnabled) {
-            isJitEnabled = waitForJITEnabled(80, 1000 * 100);
-            if(isJitEnabled) {
-                init_bypassDyldLibValidation();
-            }
-        }
-        if (!isJitEnabled) {
-            return @"JIT is required to run 32-bit apps through LiveExec32.";
+            return @"JIT is required to run 32-bit apps.";
         }
         
-        NSString *selected32BitLayerExecPath = nil;
-        NSString *resolveError = nil;
-        NSString *selected32BitLayerPath = LCResolve32BitLayerPath(docPath, [lcUserDefaults stringForKey:@"selected32BitLayer"], &selected32BitLayerExecPath, &resolveError);
-        if(!selected32BitLayerPath || !selected32BitLayerExecPath) {
-            appError = resolveError ?: @"Unable to resolve LiveExec32.app.";
+        NSString *selected32BitLayer = guestAppInfo[@"selected32BitEmulator"] ?: [lcSharedDefaults stringForKey:@"LCSelected32BitEmulator"];
+        if(selected32BitLayer.length == 0) {
+            appError = @"No 32-bit emulator selected";
             NSLog(@"[LCBootstrap] %@", appError);
             *path = oldPath;
             return appError;
         }
-        NSLog(@"[LCBootstrap] Using 32-bit translation layer at %@", selected32BitLayerPath);
-        appExecPath = strdup(selected32BitLayerExecPath.UTF8String);
+        NSBundle *selected32bitLayerBundle = [NSBundle bundleWithPath:[NSString stringWithFormat:@"%@/Applications/%@", docPath, selected32BitLayer]];
+        if(!selected32bitLayerBundle) {
+            selected32bitLayerBundle = [NSBundle bundleWithPath:[NSString stringWithFormat:@"%@/Applications/%@", appGroupFolder.path, selected32BitLayer]];
+        }
+        if(!selected32bitLayerBundle) {
+            appError = @"The specified 32-bit emulator app is not found";
+            NSLog(@"[LCBootstrap] %@", appError);
+            *path = oldPath;
+            return appError;
+        }
+        // maybe need to save selected32bitLayerBundle to static variable?
+        appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+        overwriteExecPath(appExecPath);
     }
-#endif
     if(![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;
     }
     
     // Preload executable to bypass RT_NOLOAD
     appMainImageIndex = _dyld_image_count();
-#if is32BitSupported
-    LCClearDlopen32BitLayerReroute();
-#endif
-    void *appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
-#if is32BitSupported
-    if(!is32bit && LCWasDlopenReroutedTo32BitLayer()) {
-        const char *rerouted32BitLayerPath = LCLastDlopen32BitLayerPath();
-        if(rerouted32BitLayerPath) {
-            NSLog(@"[LCBootstrap] dlopen_nolock rerouted ARMv7 guest through LiveExec32.");
-            appExecPath = strdup(rerouted32BitLayerPath);
-            is32bit = true;
-        }
+    __block void *appHandle = 0;
+    void (^dlopenBlock)(void) = ^{
+        appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
+    };
+    
+    BOOL is27up = false;
+    if(@available(iOS 27, *)) { is27up = true; }
+    if(is27up && [guestAppInfo[@"segCountMismatch"] boolValue]) {
+        bypass_seg_count_check(dlopenBlock);
+    } else {
+        dlopenBlock();
     }
-#endif
+
     appExecutableHandle = appHandle;
     const char *dlerr = dlerror();
     
@@ -748,9 +593,6 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         NSLog(@"[LCBootstrap] %@", appError);
         *path = oldPath;
         return appError;
-    }
-    if(!LCUpdateAppMainImageIndexForPath(appExecPath)) {
-        NSLog(@"[LCBootstrap] Failed to find loaded app image for %s", appExecPath);
     }
     
     if([guestAppInfo[@"dontInjectTweakLoader"] boolValue] && ![guestAppInfo[@"dontLoadTweakLoader"] boolValue]) {
@@ -767,20 +609,19 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"].UTF8String, RTLD_LAZY|RTLD_GLOBAL);
     }
     
-    if(!isSideStore && sideStoreExist && ![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
-        dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStore.framework/SideStore"].UTF8String, RTLD_LAZY);
+    if(sideStoreExist) {
+        if (!isLiveProcess && (isSideStore || ![guestAppInfo[@"dontInjectTweakLoader"] boolValue])) {
+            dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/SideStoreSupport.framework/SideStoreSupport"].UTF8String, RTLD_LAZY);
+        } else if (isLiveProcess && isSideStore) {
+            dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"../../Frameworks/SideStoreSupport.framework/SideStoreSupport"].UTF8String, RTLD_LAZY);
+        }
     }
     
     // Fix dynamic properties of some apps
     [NSUserDefaults performSelector:@selector(initialize)];
 
     // Attempt to load the bundle. 32-bit bundle will always fail because of 32-bit main executable, so ignore it
-    if (
-#if is32BitSupported
-        !is32bit &&
-#endif
-        ![appBundle loadAndReturnError:&error]
-        ) {
+    if (!is32bit && ![appBundle loadAndReturnError:&error]) {
         appError = error.localizedDescription;
         NSLog(@"[LCBootstrap] loading bundle failed: %@", error);
         *path = oldPath;
@@ -800,17 +641,13 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     // Go!
     NSLog(@"[LCBootstrap] jumping to main %p", appMain);
     int ret;
-#if is32BitSupported
     if(!is32bit) {
-#endif
         argv[0] = (char *)appExecPath;
-        ret = appMain(argc, argv);
-#if is32BitSupported
+        ret = appMain(argc, argv, environ);
     } else {
         char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
-        ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32);
+        ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
     }
-#endif
     return [NSString stringWithFormat:@"App returned from its main function with code %d.", ret];
 }
 
@@ -1010,16 +847,10 @@ int LiveContainerMain(int argc, char *argv[]) {
     }
     
     void *LiveContainerSwiftUIHandle = dlopen("@executable_path/Frameworks/LiveContainerSwiftUI.framework/LiveContainerSwiftUI", RTLD_LAZY);
-    if(!LiveContainerSwiftUIHandle) {
-        const char *dlerr = dlerror();
-        NSString *error = [NSString stringWithFormat:@"Failed to load LiveContainerSwiftUI.framework: %s", dlerr ?: "unknown dlopen error"];
-        NSLog(@"[LCBootstrap] %@", error);
-        [lcUserDefaults setObject:error forKey:@"error"];
-        return 1;
-    }
+    NSCAssert(LiveContainerSwiftUIHandle, @"%s", dlerror());
     
     if(sideStoreExist) {
-        void* sideStoreHandle = dlopen("@executable_path/Frameworks/SideStore.framework/SideStore", RTLD_LAZY);
+        void* sideStoreHandle = dlopen("@executable_path/Frameworks/SideStoreSupport.framework/SideStoreSupport", RTLD_LAZY);
     }
 
     if ([lcUserDefaults boolForKey:@"LCLoadTweaksToSelf"]) {
@@ -1040,20 +871,13 @@ int LiveContainerMain(int argc, char *argv[]) {
     }
 
     int (*LiveContainerSwiftUIMain)(void) = dlsym(LiveContainerSwiftUIHandle, "main");
-    if(!LiveContainerSwiftUIMain) {
-        const char *dlerr = dlerror();
-        NSString *error = [NSString stringWithFormat:@"Failed to resolve LiveContainerSwiftUI main: %s", dlerr ?: "unknown dlsym error"];
-        NSLog(@"[LCBootstrap] %@", error);
-        [lcUserDefaults setObject:error forKey:@"error"];
-        return 1;
-    }
     return LiveContainerSwiftUIMain();
 
 }
 
 #ifdef DEBUG
-int callAppMain(int argc, char *argv[]) {
+int callAppMain(int argc, char *argv[], char *envp[]) {
     assert(appMain != NULL);
-    __attribute__((musttail)) return appMain(argc, argv);
+    __attribute__((musttail)) return appMain(argc, argv, envp);
 }
 #endif

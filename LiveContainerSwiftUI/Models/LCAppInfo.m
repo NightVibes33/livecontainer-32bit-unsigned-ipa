@@ -260,7 +260,7 @@
         @"IgnoreManifestScope": @YES,
         @"IsRemovable": @YES,
         @"Label": self.displayName,
-        @"PayloadDescription": [NSString stringWithFormat:@"This profile installs a web clip which opens %@ (%@) in LiveContainer", self.displayName, self.bundlePath.lastPathComponent],
+        @"PayloadDescription": [NSString stringWithFormat:@"Web Clip for launching %@ (%@) in LiveContainer", self.displayName, self.bundlePath.lastPathComponent],
         @"PayloadDisplayName": self.displayName,
         @"PayloadIdentifier": self.bundleIdentifier,
         @"PayloadType": @"com.apple.webClip.managed",
@@ -308,7 +308,7 @@
     NSString *execPath = [NSString stringWithFormat:@"%@/%@", appPath, _infoPlist[@"CFBundleExecutable"]];
     
     // Update patch
-    int currentPatchRev = 9;
+    int currentPatchRev = 7;
     bool needPatch = [info[@"LCPatchRevision"] intValue] < currentPatchRev;
     if (needPatch || forceSign) {
         // copy-delete-move to avoid EXC_BAD_ACCESS (SIGKILL - CODESIGNING)
@@ -319,35 +319,25 @@
         [fm moveItemAtPath:backupPath toPath:execPath error:&err];
     }
     
-#if is32BitSupported
-    bool is32bit = self.is32bit;
-#else
     bool is32bit = false;
-#endif
-    bool shouldInspectExecutable = needPatch || forceSign || info[@"is32bit"] == nil;
-    if (shouldInspectExecutable) {
+    if (needPatch) {
         __block bool has64bitSlice = NO;
         __block bool isEncrypted = false;
         NSString *error = LCParseMachO(execPath.UTF8String, false, ^(const char *path, struct mach_header_64 *header, int fd, void* filePtr) {
             if(header->cputype == CPU_TYPE_ARM64) {
                 has64bitSlice |= YES;
-                if(needPatch) {
-                    int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
-                    if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
-                        info[@"LCTweakLoaderCantInject"] = @YES;
-                        info[@"dontInjectTweakLoader"] = @YES;
-                    }
-                    if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
-                        info[@"segCountMismatch"] = @YES;
-                    }
+                int patchResult = LCPatchExecSlice(path, header, ![self dontInjectTweakLoader]);
+                if(patchResult & PATCH_EXEC_RESULT_NO_SPACE_FOR_TWEAKLOADER) {
+                    info[@"LCTweakLoaderCantInject"] = @YES;
+                    info[@"dontInjectTweakLoader"] = @YES;
+                }
+                if(patchResult & PATCH_EXEC_RESULT_SEG_COUNT_MISMATCH) {
+                    info[@"segCountMismatch"] = @YES;
                 }
             }
             isEncrypted |= LCIsMachOEncrypted(header);
         });
         is32bit = !has64bitSlice;
-        if(needPatch) {
-            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
-        }
         if (isEncrypted) {
             error = @"The app you tried to install is encrypted. Please provide decrypted app.";
         }
@@ -356,30 +346,21 @@
             completetionHandler(NO, error);
             return;
         }
-        if(needPatch) {
-            info[@"LCPatchRevision"] = @(currentPatchRev);
-            forceSign = true;
+        if (!is32bit) {
+            LCPatchAppBundleFixupARM64eSlice([NSURL fileURLWithPath:appPath]);
+        } else {
+            self.isJITNeeded = YES;
+            self.classicMode = YES;
+            self.spoofSDKVersion = YES;
         }
-#if is32BitSupported
-        self.is32bit = is32bit;
-#else
+        info[@"LCPatchRevision"] = @(currentPatchRev);
+        forceSign = true;
+        
         [self save];
-#endif
+        self.is32bit = is32bit;
     }
-#if is32BitSupported
-    else {
-        // Cached architecture can be stale in either direction. Always let the executable repair it.
-        is32bit = [self refreshIs32bitFromExecutable];
-    }
-#endif
-#if !is32BitSupported
-    if(is32bit) {
-        completetionHandler(NO, @"32-bit app is NOT supported in this build. Enable the experimental is32BitSupported build flag and install LiveExec32.app to try the 32-bit translation layer.");
-        return;
-    }
-#endif
 
-    if (!LCSharedUtils.certificatePassword || self.dontSign) {
+    if (!LCSharedUtils.certificatePassword || self.is32bit || self.dontSign) {
         [NSUserDefaults.standardUserDefaults removeObjectForKey:@"SigningInProgress"];
         completetionHandler(YES, nil);
         return;
@@ -411,7 +392,7 @@
                     if(!success) {
                         completetionHandler(NO, error.localizedDescription);
                     } else {
-                        bool signatureValid = is32bit || checkCodeSignature(executablePath.UTF8String);
+                        bool signatureValid = checkCodeSignature(executablePath.UTF8String);
                         if(signatureValid) {
                             completetionHandler(YES, [error localizedDescription]);
                         } else {
@@ -697,7 +678,7 @@
     _info[@"LCContainers"] = containerInfo;
     [self save];
 }
-#if is32BitSupported
+
 - (bool)is32bit {
     if(_info[@"is32bit"] != nil) {
         return [_info[@"is32bit"] boolValue];
@@ -710,28 +691,10 @@
     [self save];
     
 }
-- (bool)refreshIs32bitFromExecutable {
-    NSString *executableName = _infoPlist[@"CFBundleExecutable"];
-    if(!executableName || !_bundlePath) {
-        return self.is32bit;
-    }
-    NSString *execPath = [_bundlePath stringByAppendingPathComponent:executableName];
-    __block bool foundMachOSlice = false;
-    __block bool has64bitSlice = false;
-    NSString *error = LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
-        foundMachOSlice = true;
-        if(header->cputype == CPU_TYPE_ARM64) {
-            has64bitSlice = true;
-        }
-    });
-    if(error || !foundMachOSlice) {
-        NSLog(@"[LC] Failed to refresh 32-bit state for %@: %@", execPath, error ?: @"no Mach-O slices found");
-        return self.is32bit;
-    }
-    self.is32bit = !has64bitSlice;
-    return self.is32bit;
+- (bool)is32bitEmulator {
+    return [_infoPlist[@"LC32BitTranslationLayer"] boolValue];
 }
-#endif
+
 - (bool)dontSign {
     if(_info[@"dontSign"] != nil) {
         return [_info[@"dontSign"] boolValue];
@@ -746,6 +709,9 @@
 }
 
 - (NSString *)jitLaunchScriptJs {
+    if (self.is32bit && LCUtils.isTXMScriptRequired) {
+        return LCUtils.base64EncodedUniversalJITScript;
+    }
     return _info[@"jitLaunchScriptJs"];
 }
 
@@ -754,6 +720,19 @@
         _info[@"jitLaunchScriptJs"] = jitLaunchScriptJs;
     } else {
         [_info removeObjectForKey:@"jitLaunchScriptJs"];
+    }
+    if (!_autoSaveDisabled) [self save];
+}
+
+- (NSString *)selected32BitEmulator {
+    return _info[@"selected32BitEmulator"];
+}
+
+- (void)setSelected32BitEmulator:(NSString *)selected32BitEmulator {
+    if (selected32BitEmulator.length > 0) {
+        _info[@"selected32BitEmulator"] = selected32BitEmulator;
+    } else {
+        [_info removeObjectForKey:@"selected32BitEmulator"];
     }
     if (!_autoSaveDisabled) [self save];
 }
@@ -775,6 +754,10 @@
         LCParseMachO(execPath.UTF8String, true, ^(const char *path, struct mach_header_64 *header, int fd, void *filePtr) {
             sdkVersion = dyld_get_sdk_version((const struct mach_header *)header);
         });
+        // Hardcode spoofed SDK to iOS 11 if lower, as lower causes `Error in compatibility flow` crashes
+        if((self.is32bit || sdkVersion) && sdkVersion < 0xb0000) {
+            sdkVersion = 0xb0000;
+        }
         NSLog(@"[LC] sdkversion = %8x", sdkVersion);
         _info[@"spoofSDKVersion"] = [NSNumber numberWithUnsignedInt:sdkVersion];
     }

@@ -13,7 +13,6 @@
 #include <mach-o/dyld_images.h>
 #include <mach/mach.h>
 #include <sys/syscall.h>
-#include <errno.h>
 
 #include "dyld_bypass_validation.h"
 #include "litehook.h"
@@ -31,10 +30,6 @@ _builtin_vm_protect:     \n
 );
 
 static bool redirectFunction(char *name, void *patchAddr, void *target) {
-    if(!patchAddr || !target) {
-        NSLog(@"[DyldLVBypass] hook %s skipped: missing patch or target address", name);
-        return false;
-    }
     kern_return_t kr = litehook_hook_function(patchAddr, target);
     if (kr == KERN_SUCCESS) {
         NSLog(@"[DyldLVBypass] hook %s succeed!", name);
@@ -62,16 +57,9 @@ static bool hasProtection(vm_address_t regionAddress, vm_prot_t requiredProtecti
 
 static void* hooked_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
     void *map = __mmap(addr, len, prot, flags, fd, offset);
-    if (map == MAP_FAILED && fd >= 0 && (prot & PROT_EXEC)) {
+    if (fd && (prot & PROT_EXEC) && (map == MAP_FAILED || !hasProtection((vm_address_t)map, PROT_EXEC))) {
         map = __mmap(addr, len, PROT_READ | PROT_WRITE, flags | MAP_PRIVATE | MAP_ANON, 0, 0);
-        if(map == MAP_FAILED) {
-            return map;
-        }
         void *memoryLoadedFile = __mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, offset);
-        if(memoryLoadedFile == MAP_FAILED) {
-            munmap(map, len);
-            return MAP_FAILED;
-        }
         memcpy(map, memoryLoadedFile, len);
         munmap(memoryLoadedFile, len);
         mprotect(map, len, prot);
@@ -81,10 +69,6 @@ static void* hooked_mmap(void *addr, size_t len, int prot, int flags, int fd, of
 }
 
 static int hooked___fcntl(int fildes, int cmd, void *param) {
-    if(!orig_fcntl) {
-        errno = ENOSYS;
-        return -1;
-    }
     if (cmd == F_ADDFILESIGS_RETURN) {
 #if !(TARGET_OS_MACCATALYST || TARGET_OS_SIMULATOR)
         // attempt to attach code signature on iOS only as the binaries may have been signed
@@ -109,9 +93,6 @@ static int hooked___fcntl(int fildes, int cmd, void *param) {
 }
 
 char *searchDyldFunction(char *base, char *signature, int length) {
-    if(!base || !signature || length <= 0) {
-        return NULL;
-    }
     char *patchAddr = NULL;
     for(int i=0; i < 0x80000; i+=4) {
         if (base[i] == signature[0] && memcmp(base+i, signature, length) == 0) {
@@ -126,6 +107,8 @@ void init_bypassDyldLibValidation(void) {
     static BOOL bypassed;
     if (bypassed) return;
     bypassed = YES;
+    // supporting this on 26 requires other apps to use universal JIT script, sadly not the case now
+    if (@available(iOS 19.0, *)) return;
 
     NSLog(@"[DyldLVBypass] init");
     
@@ -150,12 +133,7 @@ void searchDyldFunctions(void) {
     if(orig_dyld_fcntl && orig_dyld_mmap) return;
     
     // TODO: cache offset and litehook_find_dsc_symbol
-    struct dyld_all_image_infos *infos = _alt_dyld_get_all_image_infos();
-    if(!infos || !infos->dyldImageLoadAddress) {
-        NSLog(@"[DyldLVBypass] dyld image load address not found");
-        return;
-    }
-    char *dyldBase = (char *)infos->dyldImageLoadAddress;
+    char *dyldBase = (char *)_alt_dyld_get_all_image_infos()->dyldImageLoadAddress;
     orig_dyld_fcntl = (void *)searchDyldFunction(dyldBase, fcntlSig, sizeof(fcntlSig));
     orig_dyld_mmap = (void *)searchDyldFunction(dyldBase, mmapSig, sizeof(mmapSig));
     
