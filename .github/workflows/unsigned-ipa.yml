@@ -17,6 +17,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 467edd814ba4a52f5785e6c10518b73be26b2259
+      LIVEEXEC32_BUILD_REVISION: '2'
       DERIVED_DATA: build/DerivedData
       OUTPUT_IPA: LiveContainer-32bit-fresh-unsigned.ipa
 
@@ -37,6 +38,7 @@ jobs:
           grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
           grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'seedBundled32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'bundled32BitEmulatorRevision = "2"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           test ! -e scripts/patch_livecontainer_32bit_host.py
           test ! -e scripts/patch_liveexec32.py
           test ! -e .github/build-triggers/architecture-metadata-fix-20260730.txt
@@ -89,10 +91,13 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Add :LC32BitTranslationLayer bool true' "$LIVEEXEC_APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Delete :LCBundledSourceCommit' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :LCBundledSourceCommit string $LIVEEXEC32_SHA" "$LIVEEXEC_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Delete :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC32_BUILD_REVISION" "$LIVEEXEC_APP/Info.plist"
 
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
           /usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$LIVEEXEC_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist"
           file "$LIVEEXEC_APP/LiveExec32"
 
       - name: Build LiveContainer without signing
@@ -176,6 +181,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HOST/Info.plist")" = "com.nightvibes33.livecontainer"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
           otool -L "$EMU/LiveExec32"
           otool -L "$EMU/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
           if otool -L "$EMU/LiveExec32" | grep -Fq '/var/jb/'; then
