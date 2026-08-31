@@ -231,7 +231,7 @@ jobs:
           file "$LIVEEXEC_APP/LiveExec32"
           file "$LIVEEXEC_SHARED"
           otool -hv "$LIVEEXEC_SHARED" | grep -q DYLIB
-          nm -gU "$LIVEEXEC_SHARED" | grep -q '_LC32RunGuest'
+          nm -gU "$LIVEEXEC_SHARED" | grep '_LC32RunGuest'
 
           /usr/libexec/PlistBuddy -c 'Delete :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c 'Add :LC32BitTranslationLayer bool true' "$LIVEEXEC_APP/Info.plist"
@@ -343,7 +343,7 @@ jobs:
 
           file "$EMU/LiveExec32" | grep -q 'executable arm64'
           otool -hv "$SHARED" | grep -q DYLIB
-          nm -gU "$SHARED" | grep -q '_LC32RunGuest'
+          nm -gU "$SHARED" | grep '_LC32RunGuest'
           grep -q 'LC32BitEmulatorLoadPath' LiveContainer/LCBootstrap.m
           grep -q 'dlsym(appHandle, emulatorEntrySymbol.UTF8String)' LiveContainer/LCBootstrap.m
 
