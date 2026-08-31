@@ -101,24 +101,39 @@ jobs:
         working-directory: build/LiveExec32
         run: bash GuestMakefile/pack-ramdisk.sh
 
-      - name: Build LiveExec32 shared runtime
+      - name: Build LiveExec32 Aug 30 IPA
         working-directory: build/LiveExec32
         run: gmake package
 
-      - name: Validate LiveExec32 runtime and stamp bundle metadata
+      - name: Extract, validate, and stamp completed LiveExec32 bundle
         shell: bash
         run: |
           set -euxo pipefail
-          LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name 'LiveExec32.app' -print -quit)
+
+          LIVEEXEC_UPSTREAM_IPA=$(find build/LiveExec32/packages -maxdepth 1 -type f -name '*.ipa' -print -quit)
+          test -n "$LIVEEXEC_UPSTREAM_IPA"
+          test -f "$LIVEEXEC_UPSTREAM_IPA"
+
+          rm -rf build/LiveExec32-package
+          mkdir -p build/LiveExec32-package
+          unzip -q "$LIVEEXEC_UPSTREAM_IPA" -d build/LiveExec32-package
+
+          LIVEEXEC_APP=$(find build/LiveExec32-package/Payload -maxdepth 2 -type d -name 'LiveExec32.app' -print -quit)
           test -n "$LIVEEXEC_APP"
           test -f "$LIVEEXEC_APP/LiveExec32"
           test -f "$LIVEEXEC_APP/Info.plist"
-          test -f "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
-          test -f "$LIVEEXEC_APP/Frameworks/LC32HelpUI.framework/LC32HelpUI"
-          test -f "$LIVEEXEC_APP/RootFS/usr/lib/dyld"
+
+          SHARED="$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          HELP="$LIVEEXEC_APP/Frameworks/LC32HelpUI.framework/LC32HelpUI"
+          DYLD="$LIVEEXEC_APP/RootFS/usr/lib/dyld"
+
+          test -f "$SHARED"
+          test -f "$HELP"
+          test -f "$DYLD"
           test ! -e "$LIVEEXEC_APP/libdynarmic.dylib"
 
-          nm -gU "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+          nm -gU "$SHARED" | grep -q '_LC32RunGuest'
+          otool -hv "$SHARED" | grep -q 'DYLIB'
           if otool -L "$LIVEEXEC_APP/LiveExec32" | grep -q 'libdynarmic'; then
             echo 'Launcher unexpectedly depends on a dynamic libdynarmic' >&2
             exit 1
@@ -132,10 +147,12 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC32_BUILD_REVISION" "$LIVEEXEC_APP/Info.plist"
 
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+          echo "Resolved completed LiveExec32 bundle: $LIVEEXEC_APP"
+          echo "Resolved guest dyld: $DYLD"
           file "$LIVEEXEC_APP/LiveExec32"
-          file "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          file "$SHARED"
           otool -L "$LIVEEXEC_APP/LiveExec32"
-          otool -L "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          otool -L "$SHARED"
 
       - name: Build LiveContainer without signing
         id: build_host
@@ -228,7 +245,9 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
+
           nm -gU "$SHARED" | grep -q '_LC32RunGuest'
+          otool -hv "$SHARED" | grep -q 'DYLIB'
           if otool -L "$EMU/LiveExec32" | grep -q 'libdynarmic'; then
             echo 'Packaged launcher unexpectedly depends on a dynamic libdynarmic' >&2
             exit 1
