@@ -536,6 +536,8 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     
     bool is32bit = [guestAppInfo[@"is32bit"] boolValue];
+    const char *emulatorExecPath = NULL;
+    const char *loadExecPath = appExecPath;
     if(is32bit) {
         if (!isJitEnabled) {
             return @"JIT is required to run 32-bit apps.";
@@ -558,9 +560,21 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
             *path = oldPath;
             return appError;
         }
-        // maybe need to save selected32bitLayerBundle to static variable?
-        appExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
-        overwriteExecPath(appExecPath);
+        // LiveExec32 is split into a launcher executable plus a loadable
+        // shared framework. dyld refuses to dlopen an MH_EXECUTE image,
+        // so preserve the launcher path for argv[0]/RootFS resolution and
+        // load the framework entry point instead.
+        emulatorExecPath = strdup(selected32bitLayerBundle.executablePath.UTF8String);
+        NSString *sharedFrameworkPath = [selected32bitLayerBundle.bundlePath
+            stringByAppendingPathComponent:@"Frameworks/LiveExec32Shared.framework/LiveExec32Shared"];
+        if(![fm fileExistsAtPath:sharedFrameworkPath]) {
+            appError = @"The selected 32-bit emulator is missing LiveExec32Shared.framework";
+            NSLog(@"[LCBootstrap] %@", appError);
+            *path = oldPath;
+            return appError;
+        }
+        loadExecPath = strdup(sharedFrameworkPath.fileSystemRepresentation);
+        overwriteExecPath(emulatorExecPath);
     }
     if(![guestAppInfo[@"dontInjectTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;
@@ -570,7 +584,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     appMainImageIndex = _dyld_image_count();
     __block void *appHandle = 0;
     void (^dlopenBlock)(void) = ^{
-        appHandle = dlopen_nolock(appExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
+        appHandle = dlopen_nolock(loadExecPath, RTLD_LAZY|RTLD_GLOBAL|RTLD_FIRST);
     };
     
     BOOL is27up = false;
@@ -629,10 +643,21 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
     }
     NSLog(@"[LCBootstrap] loaded bundle");
 
-    // Find main()
-    appMain = getAppEntryPoint(appHandle);
+    // Find main(). 32-bit emulators expose a framework ABI rather than an
+    // LC_MAIN entry point because their app launcher is not dlopen-able.
+    if(is32bit) {
+        dlerror();
+        appMain = (int (*)(int, char **, char **))dlsym(appHandle, "LC32RunGuest");
+        const char *entryError = dlerror();
+        if(entryError) {
+            NSLog(@"[LCBootstrap] LC32RunGuest lookup failed: %s", entryError);
+            appMain = NULL;
+        }
+    } else {
+        appMain = getAppEntryPoint(appHandle);
+    }
     if (!appMain) {
-        appError = @"Could not find the main entry point";
+        appError = is32bit ? @"Could not find LC32RunGuest in the selected 32-bit emulator" : @"Could not find the main entry point";
         NSLog(@"[LCBootstrap] %@", appError);
         *path = oldPath;
         return appError;
@@ -645,7 +670,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         argv[0] = (char *)appExecPath;
         ret = appMain(argc, argv, environ);
     } else {
-        char *argv32[] = {(char*)appExecPath, (char*)*path, NULL};
+        char *argv32[] = {(char*)emulatorExecPath, (char*)*path, NULL};
         ret = appMain(sizeof(argv32)/sizeof(*argv32) - 1, argv32, environ);
     }
     return [NSString stringWithFormat:@"App returned from its main function with code %d.", ret];
