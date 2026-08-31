@@ -9,6 +9,46 @@ import SwiftUI
 @main
 struct LiveContainerSwiftUIApp : SwiftUI.App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    private static let bundled32BitEmulatorName = "LiveExec32.app"
+    private static let bundled32BitEmulatorCommit = "467edd814ba4a52f5785e6c10518b73be26b2259"
+
+    private static func seedBundled32BitEmulator(using fm: FileManager) throws {
+        let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
+        guard fm.fileExists(atPath: bundledURL.path) else {
+            return
+        }
+
+        let bundledInfoURL = bundledURL.appendingPathComponent("Info.plist")
+        guard
+            let bundledInfo = NSDictionary(contentsOf: bundledInfoURL),
+            bundledInfo["LC32BitTranslationLayer"] as? Bool == true
+        else {
+            NSLog("[LC32] Ignoring bundled LiveExec32 because LC32BitTranslationLayer is missing")
+            return
+        }
+
+        try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
+        let installedURL = LCPath.bundlePath.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
+        let installedInfoURL = installedURL.appendingPathComponent("Info.plist")
+        let installedInfo = NSDictionary(contentsOf: installedInfoURL)
+        let installedCommit = installedInfo?["LCBundledSourceCommit"] as? String
+
+        if installedCommit != bundled32BitEmulatorCommit {
+            if fm.fileExists(atPath: installedURL.path) {
+                try fm.removeItem(at: installedURL)
+            }
+            try fm.copyItem(at: bundledURL, to: installedURL)
+            NSLog("[LC32] Seeded bundled LiveExec32 emulator at %@", installedURL.path)
+        }
+
+        let sharedDefaults = UserDefaults.lcShared()
+        let selected = sharedDefaults.string(forKey: "LCSelected32BitEmulator") ?? ""
+        if selected.isEmpty {
+            sharedDefaults.set(bundled32BitEmulatorName, forKey: "LCSelected32BitEmulator")
+            NSLog("[LC32] Selected bundled LiveExec32 as the default 32-bit emulator")
+        }
+    }
     
     init() {
         let fm = FileManager()
@@ -21,6 +61,8 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
         var tempURLSchemes: Set<String>? = DataManager.shared.model.multiLCStatus != 2 ? Set() : nil
 
         do {
+            try Self.seedBundled32BitEmulator(using: fm)
+
             // load apps
             try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
             let appDirs = try fm.contentsOfDirectory(atPath: LCPath.bundlePath.path)
