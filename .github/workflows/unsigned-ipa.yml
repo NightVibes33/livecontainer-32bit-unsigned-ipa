@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '5'
+      LIVEEXEC32_BUILD_REVISION: '6'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -231,6 +231,8 @@ jobs:
           test -d "$LIVEEXEC_APP/RootFS"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
+          file "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib" | grep Mach-O
           file "$LIVEEXEC_APP/LiveExec32"
           file "$LIVEEXEC_SHARED"
           otool -hv "$LIVEEXEC_SHARED" | grep -q DYLIB
@@ -336,6 +338,8 @@ jobs:
           test -d "$EMU/RootFS"
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$EMU/RootFS/usr/lib/libcharset.1.dylib"
+          test -f "$EMU/RootFS/usr/lib/libstdc++.6.dylib"
+          file "$EMU/RootFS/usr/lib/libstdc++.6.dylib" | grep Mach-O
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
