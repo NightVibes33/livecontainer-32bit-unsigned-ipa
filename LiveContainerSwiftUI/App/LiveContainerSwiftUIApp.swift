@@ -12,6 +12,7 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
 
     private static let bundled32BitEmulatorName = "LiveExec32.app"
     private static let bundled32BitEmulatorCommit = "467edd814ba4a52f5785e6c10518b73be26b2259"
+    private static let bundled32BitEmulatorRevision = "2"
 
     private static func seedBundled32BitEmulator(using fm: FileManager) throws {
         let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
@@ -28,18 +29,27 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
             return
         }
 
+        let bundledCommit = bundledInfo["LCBundledSourceCommit"] as? String
+        let bundledRevision = bundledInfo["LCBundledBuildRevision"] as? String
+        guard bundledCommit == bundled32BitEmulatorCommit,
+              bundledRevision == bundled32BitEmulatorRevision else {
+            NSLog("[LC32] Ignoring bundled LiveExec32 because its bundled metadata is stale")
+            return
+        }
+
         try fm.createDirectory(at: LCPath.bundlePath, withIntermediateDirectories: true)
         let installedURL = LCPath.bundlePath.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
         let installedInfoURL = installedURL.appendingPathComponent("Info.plist")
         let installedInfo = NSDictionary(contentsOf: installedInfoURL)
         let installedCommit = installedInfo?["LCBundledSourceCommit"] as? String
+        let installedRevision = installedInfo?["LCBundledBuildRevision"] as? String
 
-        if installedCommit != bundled32BitEmulatorCommit {
+        if installedCommit != bundled32BitEmulatorCommit || installedRevision != bundled32BitEmulatorRevision {
             if fm.fileExists(atPath: installedURL.path) {
                 try fm.removeItem(at: installedURL)
             }
             try fm.copyItem(at: bundledURL, to: installedURL)
-            NSLog("[LC32] Seeded bundled LiveExec32 emulator at %@", installedURL.path)
+            NSLog("[LC32] Seeded bundled LiveExec32 emulator revision %@ at %@", bundled32BitEmulatorRevision, installedURL.path)
         }
 
         let sharedDefaults = LCUtils.appGroupUserDefault
