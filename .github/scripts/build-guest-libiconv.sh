@@ -32,6 +32,13 @@ install -m 0644 "$SOURCE/libcharset/include/localcharset.h" "$SOURCE/include/loc
 gmake -C "$SOURCE/lib" -j"$(sysctl -n hw.logicalcpu)"
 
 install -d -m 0755 "$ROOTFS/usr/lib"
+# ZIP-based IPA installation materializes guest symlinks as tiny text files.
+# Felix links this compatibility name directly, so store a real Mach-O there.
+install -m 0755 "$ROOTFS/usr/lib/libstdc++.6.0.9.dylib" "$RUNNER_TEMP/libstdc++.6.dylib"
+rm -f "$ROOTFS/usr/lib/libstdc++.6.dylib"
+install -m 0755 "$RUNNER_TEMP/libstdc++.6.dylib" "$ROOTFS/usr/lib/libstdc++.6.dylib"
+file "$ROOTFS/usr/lib/libstdc++.6.dylib" | grep Mach-O
+test "$(otool -D "$ROOTFS/usr/lib/libstdc++.6.dylib" | tail -n 1)" = /usr/lib/libstdc++.6.dylib
 install -m 0755 "$SOURCE/lib/.libs/libiconv.2.dylib" \
   "$ROOTFS/usr/lib/libiconv.2.dylib"
 install -m 0755 "$SOURCE/libcharset/lib/.libs/libcharset.1.dylib" \
