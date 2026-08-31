@@ -1,0 +1,103 @@
+name: Sync current LiveContainer 32-bit stack
+
+on:
+  push:
+    branches:
+      - sync/livecontainer-liveexec32-2026-08-30
+    paths:
+      - '.github/workflows/sync-livecontainer-32bit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Merge current LiveContainer and preserve local integration
+        env:
+          UPSTREAM_COMMIT: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
+          SYNC_BRANCH: sync/livecontainer-liveexec32-2026-08-30
+        run: |
+          set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BASE_SHA=$(git rev-parse HEAD)
+          export BASE_SHA
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/LiveContainer/LiveContainer.git
+          git fetch --no-tags upstream main
+          git cat-file -e "${UPSTREAM_COMMIT}^{commit}"
+
+          set +e
+          git merge --no-ff --no-commit "$UPSTREAM_COMMIT"
+          MERGE_RC=$?
+          set -e
+
+          if [ "$MERGE_RC" -ne 0 ]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            if [ "${#conflicts[@]}" -eq 0 ]; then
+              echo "merge failed without ordinary file conflicts" >&2
+              exit "$MERGE_RC"
+            fi
+            printf 'Resolving %s merge conflicts\n' "${#conflicts[@]}"
+            for f in "${conflicts[@]}"; do
+              case "$f" in
+                LiveContainer/LCBootstrap.m|.github/workflows/*|scripts/*|README.md|apps.json|.github/apps.json|.github/apps_nightly.json|.github/apps_ss_lc.json)
+                  git checkout --ours -- "$f"
+                  ;;
+                *)
+                  git checkout --theirs -- "$f"
+                  ;;
+              esac
+              git add -- "$f"
+            done
+          fi
+
+          git checkout "$BASE_SHA" -- LiveContainer/LCBootstrap.m
+          git checkout "$BASE_SHA" -- scripts/patch_liveexec32.py
+          git checkout "$BASE_SHA" -- scripts/patch_livecontainer_32bit_2026.py
+
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess
+          base = os.environ['BASE_SHA']
+          path = pathlib.Path('LiveContainer.xcodeproj/project.pbxproj')
+          before = subprocess.check_output(['git', 'show', f'{base}:{path.as_posix()}'], text=True)
+          after = path.read_text()
+          pattern = re.compile(r'PRODUCT_BUNDLE_IDENTIFIER = ([^;]+);')
+          old = pattern.findall(before)
+          new = pattern.findall(after)
+          if len(old) != len(new):
+              raise SystemExit(f'Bundle identifier slot count changed: local={len(old)} upstream={len(new)}')
+          values = iter(old)
+          after = pattern.sub(lambda m: f'PRODUCT_BUNDLE_IDENTIFIER = {next(values)};', after)
+          path.write_text(after)
+          print('preserved bundle identifiers:', old)
+          PY
+
+          # Patch host code only; workflow YAML is restored before the commit and
+          # updated separately through the GitHub connector, which has workflow-write access.
+          python3 scripts/patch_livecontainer_32bit_2026.py
+
+          grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'selected32BitEmulator' LiveContainerSwiftUI/Models/LCAppInfo.h
+          grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
+          grep -q 'LCSelected32BitEmulator' LiveContainerSwiftUI/Views/Settings/LCSettingsView.swift
+          test -f Resources/universal.js
+
+          # GitHub Actions' GITHUB_TOKEN cannot push workflow-file changes here.
+          # Restore every workflow to the branch's pre-sync state before committing.
+          git checkout "$BASE_SHA" -- .github/workflows
+
+          git add -A
+          git status --short
+          git commit -m "Sync LiveContainer 32-bit handlers and LiveExec32 integration"
+          git push origin "HEAD:$SYNC_BRANCH"

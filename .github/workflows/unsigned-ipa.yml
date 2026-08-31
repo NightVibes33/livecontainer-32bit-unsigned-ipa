@@ -31,21 +31,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Checkout LiveExec32
+      - name: Checkout latest LiveExec32
         uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
           ref: 467edd814ba4a52f5785e6c10518b73be26b2259
           path: build/LiveExec32
 
-      - name: Patch integrated 32-bit runtime
+      - name: Prepare current 32-bit emulator integration
         run: |
           set -euxo pipefail
-          python3 scripts/patch_livecontainer_32bit_host.py LiveContainer/LCBootstrap.m
           python3 scripts/patch_liveexec32.py build/LiveExec32
-          grep -q 'Starting LiveExec32 without the legacy host JIT gate' LiveContainer/LCBootstrap.m
+          grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'selected32BitEmulator' LiveContainerSwiftUI/Models/LCAppInfo.h
+          grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
           grep -q 'LC32_RUNTIME_ROOT_MISSING' build/LiveExec32/main.cpp
-          ! grep -q 'JIT is required to run 32-bit apps through LiveExec32' LiveContainer/LCBootstrap.m
+          test -f Resources/universal.js
 
       - name: Prepare Theos
         run: |
@@ -53,7 +54,7 @@ jobs:
           brew install ldid
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
 
-      - name: Build bundled LiveExec32
+      - name: Build bundled LiveExec32 emulator
         env:
           THEOS: ${{ runner.temp }}/theos
         run: |
@@ -75,14 +76,17 @@ jobs:
           fi
           test -f "$LIVEEXEC_APP/Info.plist"
           test -f "$LIVEEXEC_APP/LiveExec32"
+          /usr/libexec/PlistBuddy -c 'Add :LC32BitTranslationLayer bool true' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Set :LC32BitTranslationLayer true' "$LIVEEXEC_APP/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist")" = true
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
 
       - name: Set CI bundle build number
         run: |
           set -eu
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" Resources/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" LiveContainer/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' LiveContainer/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' LiveContainer/Info.plist
 
       - name: Build app without signing
         run: |
@@ -104,7 +108,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          set -eu
+          set -euxo pipefail
           APP_PATH=$(find "$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos" -maxdepth 2 -type d -name 'LiveContainer.app' -print -quit)
           if [ -z "$APP_PATH" ]; then
             echo "LiveContainer.app was not produced" >&2
@@ -144,6 +148,7 @@ jobs:
           make_entitlements LiveProcess/LiveProcess.entitlements "$LIVEPROCESS_ENTITLEMENTS" "$BUNDLE_ID.LiveProcess"
           make_entitlements LaunchAppExtension/LaunchAppExtension.entitlements "$LAUNCH_ENTITLEMENTS" "$BUNDLE_ID.LaunchAppExtension"
           make_entitlements ShareExtension/ShareExtension.entitlements "$SHARE_ENTITLEMENTS" "$BUNDLE_ID.ShareExtension"
+
           find "$APP_PATH" -type f \( -name '*.dylib' -o -name '*.so' \) -print | while IFS= read -r binary; do
             codesign --force --sign - --timestamp=none "$binary"
           done
@@ -172,10 +177,11 @@ jobs:
           codesign --force --sign - --timestamp=none --entitlements "$MAIN_ENTITLEMENTS" "$APP_PATH"
           tools/package-unsigned-ipa.sh "$APP_PATH" "$OUTPUT_IPA"
 
-      - name: Verify unsigned IPA
+      - name: Verify unsigned IPA and 32-bit integration
         run: |
-          set -eu
+          set -euxo pipefail
           test -f "$OUTPUT_IPA"
+          rm -rf ipa-check
           unzip -q "$OUTPUT_IPA" -d ipa-check
           test -d ipa-check/Payload/LiveContainer.app
           test -f ipa-check/Payload/LiveContainer.app/Info.plist
@@ -188,18 +194,9 @@ jobs:
           codesign -d --entitlements :- ipa-check/Payload/LiveContainer.app > ipa-check-entitlements.plist
           grep -q 'group.com.SideStore.SideStore' ipa-check-entitlements.plist
           grep -q 'group.com.rileytestut.AltStore' ipa-check-entitlements.plist
-          if ! grep -R -a -q 'Rerouting 32-bit guest dlopen' ipa-check/Payload/LiveContainer.app; then
-            echo "missing ARMv7 dlopen reroute marker in packaged IPA" >&2
-            exit 1
-          fi
-          if ! grep -R -a -q 'Starting LiveExec32 without the legacy host JIT gate' ipa-check/Payload/LiveContainer.app; then
-            echo "missing direct LiveExec32 launch marker in packaged IPA" >&2
-            exit 1
-          fi
-          if ! grep -R -a -q 'LC32_RUNTIME_ROOT_MISSING' ipa-check/Payload/LiveContainer.app/LiveExec32.app; then
-            echo "missing patched LiveExec32 runtime diagnostics" >&2
-            exit 1
-          fi
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' ipa-check/Payload/LiveContainer.app/LiveExec32.app/Info.plist)" = true
+          grep -R -a -q 'LCSelected32BitEmulator' ipa-check/Payload/LiveContainer.app
+          grep -R -a -q 'LC32_RUNTIME_ROOT_MISSING' ipa-check/Payload/LiveContainer.app/LiveExec32.app
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' ipa-check/Payload/LiveContainer.app/Info.plist
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' ipa-check/Payload/LiveContainer.app/Info.plist
@@ -221,7 +218,7 @@ jobs:
           gh release create unsigned-latest "$OUTPUT_IPA" \
             --target "$GITHUB_SHA" \
             --title "Latest unsigned IPA" \
-            --notes "Unsigned real-device IPA built from $GITHUB_SHA for SideStore/AltStore import. Includes the patched integrated LiveExec32 runtime." \
+            --notes "Unsigned real-device IPA built from $GITHUB_SHA. LiveContainer is synced to upstream 12b1f78 and bundles LiveExec32 467edd8 as an LC32BitTranslationLayer emulator." \
             --latest
 
       - name: Update AltStore source
