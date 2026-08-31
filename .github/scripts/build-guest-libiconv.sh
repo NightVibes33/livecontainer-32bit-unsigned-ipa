@@ -20,7 +20,7 @@ tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
   env \
     CC="$CC" \
     CFLAGS="-arch armv7s -isysroot $SDKROOT -miphoneos-version-min=10.3 -O2" \
-    LDFLAGS="-arch armv7s -isysroot $SDKROOT -miphoneos-version-min=10.3" \
+    LDFLAGS="-arch armv7s -isysroot $SDKROOT -miphoneos-version-min=10.3 -Wl,-alias,_libiconv,_iconv,-alias,_libiconv_open,_iconv_open,-alias,_libiconv_close,_iconv_close" \
     ./configure \
       --host=arm-apple-darwin \
       --prefix=/usr \
@@ -43,4 +43,8 @@ file "$ROOTFS/usr/lib/libiconv.2.dylib" | grep arm_v7s
 file "$ROOTFS/usr/lib/libcharset.1.dylib" | grep arm_v7s
 test "$(otool -D "$ROOTFS/usr/lib/libiconv.2.dylib" | tail -n 1)" = /usr/lib/libiconv.2.dylib
 test "$(otool -D "$ROOTFS/usr/lib/libcharset.1.dylib" | tail -n 1)" = /usr/lib/libcharset.1.dylib
+ICONV_EXPORTS=$(nm -gU "$ROOTFS/usr/lib/libiconv.2.dylib")
+for symbol in _iconv _iconv_open _iconv_close; do
+  grep -F " $symbol" <<< "$ICONV_EXPORTS"
+done
 otool -L "$ROOTFS/usr/lib/libiconv.2.dylib"
