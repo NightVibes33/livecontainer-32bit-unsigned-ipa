@@ -236,7 +236,7 @@ jobs:
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _UIKeyboardCenterBeginUserInfoKey$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _UIKeyboardCenterEndUserInfoKey$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSBuddhistCalendar$'
-          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSGregorianCalendar$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation" | grep ' _NSChineseCalendar$'
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
