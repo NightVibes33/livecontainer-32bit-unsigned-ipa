@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fresh-32bit-upstream-2026-08-30
+      - fix-liveexec32-shared-loader-2026-08-30
   workflow_dispatch:
 
 permissions:
@@ -13,11 +14,11 @@ permissions:
 jobs:
   build:
     name: Build clean LiveContainer + LiveExec32 IPA
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
-      LIVEEXEC32_SHA: 467edd814ba4a52f5785e6c10518b73be26b2259
-      LIVEEXEC32_BUILD_REVISION: '2'
+      LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
+      LIVEEXEC32_BUILD_REVISION: '3'
       DERIVED_DATA: build/DerivedData
       OUTPUT_IPA: LiveContainer-32bit-fresh-unsigned.ipa
 
@@ -27,63 +28,99 @@ jobs:
         with:
           xcode-version: '26.2'
 
-      - name: Checkout fresh branch
+      - name: Checkout LiveContainer
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Verify clean upstream integration base
+      - name: Verify shared-loader integration
+        shell: bash
         run: |
           set -euxo pipefail
-          grep -q 'LCSelected32BitEmulator' LiveContainer/LCBootstrap.m
+          grep -q 'LC32RunGuest' LiveContainer/LCBootstrap.m
+          grep -q 'LiveExec32Shared.framework/LiveExec32Shared' LiveContainer/LCBootstrap.m
+          grep -q 'dlopen_nolock(loadExecPath' LiveContainer/LCBootstrap.m
+          grep -q 'bundled32BitEmulatorCommit = "3d8760320d981f16aa4b00dd77917b447ac5b774"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
+          grep -q 'bundled32BitEmulatorRevision = "3"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
           grep -q 'LC32BitTranslationLayer' LiveContainerSwiftUI/Models/LCAppInfo.m
-          grep -q 'seedBundled32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'bundled32BitEmulatorRevision = "2"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          test ! -e scripts/patch_livecontainer_32bit_host.py
-          test ! -e scripts/patch_liveexec32.py
-          test ! -e .github/build-triggers/architecture-metadata-fix-20260730.txt
 
-      - name: Checkout LiveExec32 upstream
+      - name: Checkout LiveExec32 Aug 30 dev runtime
         uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
           ref: ${{ env.LIVEEXEC32_SHA }}
           path: build/LiveExec32
+          submodules: recursive
+          persist-credentials: false
 
-      - name: Prepare Theos
+      - name: Install LiveExec32 build dependencies
+        shell: bash
         run: |
           set -euxo pipefail
-          brew install ldid
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          brew install make boost ldid
 
-      - name: Build LiveExec32 emulator
-        env:
-          THEOS: ${{ runner.temp }}/theos
+          theos="$RUNNER_TEMP/theos"
+          theos_commit=5280bd038207e14f8bd76f5417aa2fe641c03228
+          git init "$theos"
+          git -C "$theos" remote add origin https://github.com/theos/theos.git
+          git -C "$theos" fetch --depth 1 origin "$theos_commit"
+          git -C "$theos" checkout --detach FETCH_HEAD
+          git -C "$theos" submodule update --init --recursive --depth 1
+
+          sdk_archive="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+          curl --fail --location --retry 3 --output "$sdk_archive" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo "5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  $sdk_archive" \
+            | shasum -a 256 -c -
+          mkdir -p "$theos/sdks"
+          tar -xJf "$sdk_archive" -C "$theos/sdks"
+          test -f "$theos/sdks/iPhoneOS16.5.sdk/SDKSettings.plist"
+          echo "THEOS=$theos" >> "$GITHUB_ENV"
+
+          pzb_archive="$RUNNER_TEMP/pzb.zip"
+          pzb_root="$RUNNER_TEMP/pzb"
+          tools_dir="$RUNNER_TEMP/lc32-tools"
+          curl --fail --location --retry 3 --output "$pzb_archive" \
+            https://github.com/tihmstar/partialZipBrowser/releases/download/44/buildroot_macos-latest.zip
+          echo "f72452e5c9c1248b8c4b4967a357b03addbe98d61ba8bad286ef0146dfdccdd2  $pzb_archive" \
+            | shasum -a 256 -c -
+          mkdir -p "$pzb_root" "$tools_dir"
+          unzip -q "$pzb_archive" -d "$pzb_root"
+          install -m 0755 "$pzb_root/buildroot_macos-latest/usr/local/bin/pzb" "$tools_dir/pzb"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Generate LiveExec32 guest shims
+        working-directory: build/LiveExec32
+        run: gmake -C GuestMakefile generate-shims
+
+      - name: Build LiveExec32 guest frameworks
+        working-directory: build/LiveExec32
+        run: gmake -C GuestMakefile
+
+      - name: Assemble LiveExec32 guest root filesystem
+        working-directory: build/LiveExec32
+        run: bash GuestMakefile/pack-ramdisk.sh
+
+      - name: Build LiveExec32 shared runtime
+        working-directory: build/LiveExec32
+        run: gmake package
+
+      - name: Validate LiveExec32 runtime and stamp bundle metadata
+        shell: bash
         run: |
           set -euxo pipefail
-          perl -0pi -e 's/(LiveExec32_CFLAGS = [^\n]*\n)/$1LiveExec32_CCFLAGS = -std=c++17\n/' build/LiveExec32/Makefile
-          make -C build/LiveExec32 clean
-          make -C build/LiveExec32
-
           LIVEEXEC_APP=$(find build/LiveExec32/.theos -type d -name 'LiveExec32.app' -print -quit)
           test -n "$LIVEEXEC_APP"
           test -f "$LIVEEXEC_APP/LiveExec32"
           test -f "$LIVEEXEC_APP/Info.plist"
+          test -f "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          test -f "$LIVEEXEC_APP/Frameworks/LC32HelpUI.framework/LC32HelpUI"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/dyld"
+          test ! -e "$LIVEEXEC_APP/libdynarmic.dylib"
 
-          if [ -f build/LiveExec32/lib/libdynarmic.dylib ]; then
-            cp build/LiveExec32/lib/libdynarmic.dylib "$LIVEEXEC_APP/"
-            install_name_tool -id '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/libdynarmic.dylib"
-            install_name_tool -change '/var/jb/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change '/usr/local/lib/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change 'libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-            install_name_tool -change '@rpath/libdynarmic.dylib' '@loader_path/libdynarmic.dylib' "$LIVEEXEC_APP/LiveExec32" || true
-          fi
-
-          test -f "$LIVEEXEC_APP/libdynarmic.dylib"
-          otool -L "$LIVEEXEC_APP/LiveExec32"
-          otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
-          if otool -L "$LIVEEXEC_APP/LiveExec32" | grep -Fq '/var/jb/'; then
-            echo 'LiveExec32 still contains a jailbreak-only dylib dependency' >&2
+          nm -gU "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared" | grep -q '_LC32RunGuest'
+          if otool -L "$LIVEEXEC_APP/LiveExec32" | grep -q 'libdynarmic'; then
+            echo 'Launcher unexpectedly depends on a dynamic libdynarmic' >&2
             exit 1
           fi
 
@@ -95,14 +132,15 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC32_BUILD_REVISION" "$LIVEEXEC_APP/Info.plist"
 
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
-          /usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$LIVEEXEC_APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist"
           file "$LIVEEXEC_APP/LiveExec32"
+          file "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+          otool -L "$LIVEEXEC_APP/LiveExec32"
+          otool -L "$LIVEEXEC_APP/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
 
       - name: Build LiveContainer without signing
         id: build_host
         continue-on-error: true
+        shell: bash
         run: |
           set +e
           mkdir -p build
@@ -142,6 +180,7 @@ jobs:
         run: exit 1
 
       - name: Package combined unsigned IPA
+        shell: bash
         run: |
           set -euxo pipefail
           APP_PATH=$(find "$DERIVED_DATA/Build/Products/Release-iphoneos" -maxdepth 2 -type d -name 'LiveContainer.app' -print -quit)
@@ -161,9 +200,11 @@ jobs:
 
           chmod +x Payload/LiveContainer.app/LiveContainer
           chmod +x Payload/LiveContainer.app/LiveExec32.app/LiveExec32
+          chmod +x Payload/LiveContainer.app/LiveExec32.app/Frameworks/LiveExec32Shared.framework/LiveExec32Shared
           ditto -c -k --sequesterRsrc --keepParent Payload "$OUTPUT_IPA"
 
       - name: Verify combined IPA contract
+        shell: bash
         run: |
           set -euxo pipefail
           rm -rf ipa-check
@@ -171,10 +212,15 @@ jobs:
 
           HOST=ipa-check/Payload/LiveContainer.app
           EMU="$HOST/LiveExec32.app"
+          SHARED="$EMU/Frameworks/LiveExec32Shared.framework/LiveExec32Shared"
+
           test -f "$HOST/LiveContainer"
           test -f "$EMU/LiveExec32"
           test -f "$EMU/Info.plist"
-          test -f "$EMU/libdynarmic.dylib"
+          test -f "$SHARED"
+          test -f "$EMU/Frameworks/LC32HelpUI.framework/LC32HelpUI"
+          test -f "$EMU/RootFS/usr/lib/dyld"
+          test ! -e "$EMU/libdynarmic.dylib"
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
@@ -182,24 +228,26 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
-          otool -L "$EMU/LiveExec32"
-          otool -L "$EMU/LiveExec32" | grep -Fq '@loader_path/libdynarmic.dylib'
-          if otool -L "$EMU/LiveExec32" | grep -Fq '/var/jb/'; then
-            echo 'Packaged LiveExec32 still contains a jailbreak-only dylib dependency' >&2
+          nm -gU "$SHARED" | grep -q '_LC32RunGuest'
+          if otool -L "$EMU/LiveExec32" | grep -q 'libdynarmic'; then
+            echo 'Packaged launcher unexpectedly depends on a dynamic libdynarmic' >&2
             exit 1
           fi
-          grep -q 'bundled32BitEmulatorName = "LiveExec32.app"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'LCSelected32BitEmulator' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
-          grep -q 'selected32BitEmulator' LiveContainer/LCBootstrap.m
+
+          grep -q 'LiveExec32Shared.framework/LiveExec32Shared' LiveContainer/LCBootstrap.m
+          grep -q 'dlsym(appHandle, "LC32RunGuest")' LiveContainer/LCBootstrap.m
+          grep -q 'char \*argv32\[\] = {(char\*)emulatorExecPath' LiveContainer/LCBootstrap.m
+          grep -q 'bundled32BitEmulatorCommit = "3d8760320d981f16aa4b00dd77917b447ac5b774"' LiveContainerSwiftUI/App/LiveContainerSwiftUIApp.swift
 
           echo "Host architectures: $(lipo -archs "$HOST/LiveContainer")"
-          echo "Emulator architectures: $(lipo -archs "$EMU/LiveExec32")"
+          echo "LiveExec32 launcher architectures: $(lipo -archs "$EMU/LiveExec32")"
+          echo "LiveExec32 shared runtime architectures: $(lipo -archs "$SHARED")"
           ls -lh "$OUTPUT_IPA"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          name: LiveContainer-32bit-fresh-unsigned
+          name: LiveContainer-32bit-aug30-dev-unsigned
           path: ${{ env.OUTPUT_IPA }}
           if-no-files-found: error
           retention-days: 14
