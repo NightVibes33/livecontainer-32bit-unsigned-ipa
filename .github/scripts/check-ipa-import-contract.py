@@ -44,8 +44,34 @@ def main():
     parser.add_argument("--allow-gaps", action="store_true")
     args = parser.parse_args()
     contract = json.loads(Path(args.contract).read_text())
+    if contract.get("schema") != 3:
+        raise SystemExit("contract must use exhaustive binding schema 3")
     if contract.get("app_count") != 40 or len(contract.get("apps", {})) != 40:
         raise SystemExit("contract must contain exactly 40 unique apps")
+    unresolved_bindings = [
+        item for app in contract["apps"].values()
+        for item in app.get("unresolved_bindings", [])
+    ]
+    if contract.get("unresolved_binding_count") != len(unresolved_bindings):
+        raise SystemExit("contract unresolved-binding count is inconsistent")
+    if unresolved_bindings:
+        raise SystemExit(
+            f"contract contains {len(unresolved_bindings)} unresolved bindings")
+    image_count = sum(app.get("image_count", 0)
+                      for app in contract["apps"].values())
+    if image_count != 68:
+        raise SystemExit(f"contract must contain exactly 68 ARM32 images, got {image_count}")
+    self_binding_count = sum(
+        len(symbols)
+        for app in contract["apps"].values()
+        for image in app.get("images", {}).values()
+        for symbols in image.get("self_bindings", {}).values()
+    )
+    symbol_table_only_count = sum(
+        image.get("symbol_table_only_count", 0)
+        for app in contract["apps"].values()
+        for image in app.get("images", {}).values()
+    )
     root = Path(args.rootfs)
     required_by_library = defaultdict(set)
     weak_by_library = defaultdict(set)
@@ -101,7 +127,11 @@ def main():
         for symbol in sorted(symbols - available):
             missing_weak.append({"library": library, "symbol": symbol})
     report = {
-        "schema": 1, "app_count": 40,
+        "schema": 2, "contract_schema": contract["schema"],
+        "app_count": 40, "arm32_image_count": image_count,
+        "self_binding_count": self_binding_count,
+        "symbol_table_only_count": symbol_table_only_count,
+        "unresolved_binding_count": 0,
         "absolute_library_count": len(all_libraries),
         "present_library_count": len(exports),
         "missing_libraries": missing_libraries,
@@ -110,7 +140,17 @@ def main():
         "image_errors": image_errors,
     }
     Path(args.json_output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    lines = ["# LiveExec32 40-app import coverage", "", f"- Apps: 40", f"- Absolute libraries: {len(all_libraries)}", f"- Missing libraries: {len(missing_libraries)}", f"- Missing required exports: {len(missing_required)}", f"- Missing weak exports (tracked, not startup-fatal): {len(missing_weak)}", f"- Image inspection errors: {len(image_errors)}", ""]
+    lines = ["# LiveExec32 40-app import coverage", "",
+        "- Contract schema: 3 (exhaustive binding accounting)",
+        "- Apps: 40", f"- ARM32 Mach-O images: {image_count}",
+        f"- App-contained self bindings tracked: {self_binding_count}",
+        f"- Symbol-table-only records tracked: {symbol_table_only_count}",
+        "- Unresolved special/invalid bindings: 0",
+        f"- Absolute libraries: {len(all_libraries)}",
+        f"- Missing libraries: {len(missing_libraries)}",
+        f"- Missing required exports: {len(missing_required)}",
+        f"- Missing weak exports (tracked, not startup-fatal): {len(missing_weak)}",
+        f"- Image inspection errors: {len(image_errors)}", ""]
     if missing_libraries:
         lines += ["## Missing libraries", ""] + [f"- `{x}`" for x in missing_libraries] + [""]
     if missing_required:

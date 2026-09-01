@@ -35,11 +35,13 @@ def describe_macho(path, relative_name):
     if binary is None: return None
     imported=[]
     for sym in binary.imported_symbols:
-        item={"name":sym.name,"ordinal":sym.library_ordinal}
-        if sym.has_binding_info:
+        bound=bool(sym.has_binding_info)
+        item={"name":sym.name,"ordinal":sym.library_ordinal,"bound":bound}
+        if bound:
             item["weak"]=bool(sym.binding_info.weak_import)
             item["address"]=int(sym.binding_info.address)
         imported.append(item)
+    exports=sorted({sym.name for sym in binary.exported_symbols if sym.name})
     commands=[{"name":x.name,"command":str(x.command)} for x in binary.libraries]
     install_names=[x["name"] for x in commands if "ID_DYLIB" in x["command"]]
     # Mach binding ordinals count dependency load commands, never LC_ID_DYLIB.
@@ -51,7 +53,7 @@ def describe_macho(path, relative_name):
       "file_type":str(binary.header.file_type),"pie":bool(binary.is_pie),
       "encrypted":bool(binary.has_encryption_info and binary.encryption_info.crypt_id),
       "install_name":install_names[0] if install_names else None,
-      "libraries":libraries,"imports":imported,
+      "libraries":libraries,"imports":imported,"exports":exports,
     }
 
 def detect_markers(blob):

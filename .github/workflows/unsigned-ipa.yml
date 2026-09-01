@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '19'
+      LIVEEXEC32_BUILD_REVISION: '20'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -213,6 +213,7 @@ jobs:
           python3 .github/scripts/patch-liveexec32-focus-graphics.py
           python3 .github/scripts/patch-liveexec32-focus-image-bridge.py
           python3 .github/scripts/patch-liveexec32-missing-images.py
+          python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
           python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-uikit.py
           python3 .github/scripts/patch-liveexec32-corefoundation.py
@@ -450,9 +451,35 @@ jobs:
           retention-days: 90
 
       - name: Upload unsigned IPA
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: LiveContainer-32bit-fresh-unsigned
           path: ${{ env.OUTPUT_IPA }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Enforce complete 40-app required-import coverage
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("build/ipa-import-coverage.json")
+          if not report_path.is_file():
+              raise SystemExit("coverage report was not produced")
+          report = json.loads(report_path.read_text())
+          failures = []
+          if report.get("missing_libraries"):
+              failures.append(f"{len(report['missing_libraries'])} missing libraries")
+          if report.get("missing_required"):
+              failures.append(f"{len(report['missing_required'])} missing required exports")
+          if report.get("image_errors"):
+              failures.append(f"{len(report['image_errors'])} image inspection errors")
+          if failures:
+              raise SystemExit("40-app compatibility gate failed: " + ", ".join(failures))
+          print("40-app compatibility gate passed: no missing libraries, required exports, or image errors")
+          PY
