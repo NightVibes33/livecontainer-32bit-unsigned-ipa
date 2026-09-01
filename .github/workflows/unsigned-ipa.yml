@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '15'
+      LIVEEXEC32_BUILD_REVISION: '16'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -210,6 +210,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          python3 .github/scripts/patch-liveexec32-focus-graphics.py
           python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-uikit.py
           python3 .github/scripts/patch-liveexec32-corefoundation.py
@@ -251,6 +252,12 @@ jobs:
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/GameKit.framework/GameKit" | grep ' _GKPlayerAuthenticationDidChangeNotificationName$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/GameController.framework/GameController" | grep ' _GCControllerDidConnectNotification$'
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/iAd.framework/iAd" | grep ' _ADBannerContentSizeIdentifier320x50$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics" | grep ' _CGAffineTransformInvert$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics" | grep ' _CGRectStandardize$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics" | grep ' _CGColorRetain$'
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _CGPointFromString$'
+          test -f "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreVideo.framework/CoreVideo"
+          nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreVideo.framework/CoreVideo" | grep ' _kCVPixelBufferPixelFormatTypeKey$'
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
