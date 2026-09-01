@@ -399,3 +399,72 @@ if 'case LC32CoreGraphicsOpPathAddArc:' not in x:
  if anchor not in x:raise SystemExit('fourth switch anchor missing')
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
 print('CoreGraphics: added 8 typed path geometry exports')
+
+
+# fifth typed geometry array batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpContextAddLines = 143' not in h:
+ anchor='    LC32CoreGraphicsOpPathCreateCopyByTransformingPath = 142,\n'
+ if anchor not in h:raise SystemExit('fifth opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpContextAddLines = 143,
+    LC32CoreGraphicsOpContextAddRects = 144,
+    LC32CoreGraphicsOpContextClipToRects = 145,
+    LC32CoreGraphicsOpContextFillRects = 146,
+    LC32CoreGraphicsOpPathAddLines = 147,
+    LC32CoreGraphicsOpPathAddRects = 148,
+    LC32CoreGraphicsOpContextSetLineDash = 149,
+''');header.write_text(h)
+
+g=guest.read_text()
+if 'void CGContextAddLines(CGContextRef' not in g:
+ g += r'''
+void CGContextAddLines(CGContextRef c,const CGPoint *p,size_t n) { if(c&&p&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextAddLines,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)p),LC32_CG_U32(n)); }
+void CGContextAddRects(CGContextRef c,const CGRect *r,size_t n) { if(c&&r&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextAddRects,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)r),LC32_CG_U32(n)); }
+void CGContextClipToRects(CGContextRef c,const CGRect *r,size_t n) { if(c&&r&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextClipToRects,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)r),LC32_CG_U32(n)); }
+void CGContextFillRects(CGContextRef c,const CGRect *r,size_t n) { if(c&&r&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextFillRects,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)r),LC32_CG_U32(n)); }
+void CGPathAddLines(CGMutablePathRef p,const CGAffineTransform *t,const CGPoint *v,size_t n) { if(p&&v&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddLines,LC32_CG_HOST(p),LC32_CG_U32(t!=NULL),t?LC32_CG_F32(t->a):0,t?LC32_CG_F32(t->b):0,t?LC32_CG_F32(t->c):0,t?LC32_CG_F32(t->d):0,t?LC32_CG_F32(t->tx):0,t?LC32_CG_F32(t->ty):0,LC32_CG_U32((uintptr_t)v),LC32_CG_U32(n)); }
+void CGPathAddRects(CGMutablePathRef p,const CGAffineTransform *t,const CGRect *v,size_t n) { if(p&&v&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddRects,LC32_CG_HOST(p),LC32_CG_U32(t!=NULL),t?LC32_CG_F32(t->a):0,t?LC32_CG_F32(t->b):0,t?LC32_CG_F32(t->c):0,t?LC32_CG_F32(t->d):0,t?LC32_CG_F32(t->tx):0,t?LC32_CG_F32(t->ty):0,LC32_CG_U32((uintptr_t)v),LC32_CG_U32(n)); }
+void CGContextSetLineDash(CGContextRef c,CGFloat phase,const CGFloat *lengths,size_t n) { if(c&&(lengths||!n))(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetLineDash,LC32_CG_HOST(c),LC32_CG_F32(phase),LC32_CG_U32((uintptr_t)lengths),LC32_CG_U32(n)); }
+''';guest.write_text(g)
+
+x=host.read_text()
+if 'bool ReadGuestCoreGraphicsPoints(' not in x:
+ anchor='} // namespace\n\n__BEGIN_DECLS'
+ helper=r'''bool ReadGuestCoreGraphicsPoints(u32 address,size_t count,std::vector<CGPoint>& out) {
+    if(!address||!count||count>1024*1024||count>SIZE_MAX/(2*sizeof(float))||static_cast<uint64_t>(address)+count*2*sizeof(float)>static_cast<uint64_t>(UINT32_MAX)+1)return false;
+    std::vector<float> in(count*2);if(Dynarmic_mem_1read(address,in.size()*sizeof(float),reinterpret_cast<char *>(in.data()))!=0)return false;
+    out.resize(count);for(size_t i=0;i<count;++i)out[i]=CGPointMake(in[i*2],in[i*2+1]);return true;
+}
+bool ReadGuestCoreGraphicsRects(u32 address,size_t count,std::vector<CGRect>& out) {
+    if(!address||!count||count>1024*1024||count>SIZE_MAX/(4*sizeof(float))||static_cast<uint64_t>(address)+count*4*sizeof(float)>static_cast<uint64_t>(UINT32_MAX)+1)return false;
+    std::vector<float> in(count*4);if(Dynarmic_mem_1read(address,in.size()*sizeof(float),reinterpret_cast<char *>(in.data()))!=0)return false;
+    out.resize(count);for(size_t i=0;i<count;++i)out[i]=CGRectMake(in[i*4],in[i*4+1],in[i*4+2],in[i*4+3]);return true;
+}
+
+'''
+ if anchor not in x:raise SystemExit('fifth namespace anchor missing')
+ x=x.replace(anchor,helper+anchor,1)
+if 'case LC32CoreGraphicsOpContextAddLines:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpContextAddLines: {
+            if(!RequireCoreGraphicsSlots(call,3))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);std::vector<CGPoint> v;if(!c||!ReadGuestCoreGraphicsPoints(SlotU32(call,1),SlotU32(call,2),v))return 0;CGContextAddLines(c,v.data(),v.size());return 1;
+        }
+        case LC32CoreGraphicsOpContextAddRects:
+        case LC32CoreGraphicsOpContextClipToRects:
+        case LC32CoreGraphicsOpContextFillRects: {
+            if(!RequireCoreGraphicsSlots(call,3))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);std::vector<CGRect> v;if(!c||!ReadGuestCoreGraphicsRects(SlotU32(call,1),SlotU32(call,2),v))return 0;
+            if(opcode==LC32CoreGraphicsOpContextAddRects)CGContextAddRects(c,v.data(),v.size());else if(opcode==LC32CoreGraphicsOpContextClipToRects)CGContextClipToRects(c,v.data(),v.size());else{CGContextFillRects(c,v.data(),v.size());SyncBitmapBacking(c,FindBitmapBacking(c));}return 1;
+        }
+        case LC32CoreGraphicsOpPathAddLines:
+        case LC32CoreGraphicsOpPathAddRects: {
+            if(!RequireCoreGraphicsSlots(call,10))return 0;CGMutablePathRef p=SlotHostObject<CGMutablePathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;
+            if(opcode==LC32CoreGraphicsOpPathAddLines){std::vector<CGPoint> v;if(!ReadGuestCoreGraphicsPoints(SlotU32(call,8),SlotU32(call,9),v))return 0;CGPathAddLines(p,t,v.data(),v.size());}else{std::vector<CGRect> v;if(!ReadGuestCoreGraphicsRects(SlotU32(call,8),SlotU32(call,9),v))return 0;CGPathAddRects(p,t,v.data(),v.size());}return 1;
+        }
+        case LC32CoreGraphicsOpContextSetLineDash: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;size_t n=SlotU32(call,3);std::vector<CGFloat> values;const CGFloat *ptr=nullptr;if(n&&!ReadGuestCGFloatArray(SlotU32(call,2),n,false,values,ptr))return 0;CGContextSetLineDash(c,SlotCGFloat(call,1),ptr,n);return 1;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('fifth switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
+print('CoreGraphics: added 7 typed geometry array exports')
