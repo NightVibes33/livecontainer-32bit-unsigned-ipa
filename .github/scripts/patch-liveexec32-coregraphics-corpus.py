@@ -123,3 +123,114 @@ if 'case LC32CoreGraphicsOpBitmapContextGetHeight:' not in x:
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1)
  host.write_text(x)
 print('CoreGraphics: added 16 typed corpus dispatcher exports')
+
+
+# second typed context batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpContextAddCurveToPoint = 105' not in h:
+ anchor='    LC32CoreGraphicsOpContextFlush = 104,\n'
+ if anchor not in h: raise SystemExit('second opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpContextAddCurveToPoint = 105,
+    LC32CoreGraphicsOpContextAddQuadCurveToPoint = 106,
+    LC32CoreGraphicsOpContextBeginTransparencyLayer = 107,
+    LC32CoreGraphicsOpContextEndTransparencyLayer = 108,
+    LC32CoreGraphicsOpContextEOClip = 109,
+    LC32CoreGraphicsOpContextEOFillPath = 110,
+    LC32CoreGraphicsOpContextEndPage = 111,
+    LC32CoreGraphicsOpContextSetFillColorSpace = 112,
+    LC32CoreGraphicsOpContextSetFont = 113,
+    LC32CoreGraphicsOpContextSetFontSize = 114,
+    LC32CoreGraphicsOpContextSetGrayStrokeColor = 115,
+    LC32CoreGraphicsOpContextSetLineJoin = 116,
+    LC32CoreGraphicsOpContextSetMiterLimit = 117,
+    LC32CoreGraphicsOpContextSetRenderingIntent = 118,
+    LC32CoreGraphicsOpContextSetShadow = 119,
+    LC32CoreGraphicsOpContextSetTextDrawingMode = 120,
+    LC32CoreGraphicsOpContextSetTextMatrix = 121,
+''')
+ header.write_text(h)
+
+g=guest.read_text()
+if 'void CGContextAddCurveToPoint(' not in g:
+ g += r'''
+void CGContextAddCurveToPoint(CGContextRef c,CGFloat x1,CGFloat y1,CGFloat x2,CGFloat y2,CGFloat x,CGFloat y) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextAddCurveToPoint,LC32_CG_HOST(c),LC32_CG_F32(x1),LC32_CG_F32(y1),LC32_CG_F32(x2),LC32_CG_F32(y2),LC32_CG_F32(x),LC32_CG_F32(y)); }
+void CGContextAddQuadCurveToPoint(CGContextRef c,CGFloat cx,CGFloat cy,CGFloat x,CGFloat y) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextAddQuadCurveToPoint,LC32_CG_HOST(c),LC32_CG_F32(cx),LC32_CG_F32(cy),LC32_CG_F32(x),LC32_CG_F32(y)); }
+void CGContextBeginTransparencyLayer(CGContextRef c,CFDictionaryRef options) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextBeginTransparencyLayer,LC32_CG_HOST(c),LC32_CG_HOST(options)); }
+void CGContextEndTransparencyLayer(CGContextRef c) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextEndTransparencyLayer,LC32_CG_HOST(c)); }
+void CGContextEOClip(CGContextRef c) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextEOClip,LC32_CG_HOST(c)); }
+void CGContextEOFillPath(CGContextRef c) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextEOFillPath,LC32_CG_HOST(c)); }
+void CGContextEndPage(CGContextRef c) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextEndPage,LC32_CG_HOST(c)); }
+void CGContextSetFillColorSpace(CGContextRef c,CGColorSpaceRef v) { if(c&&v)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetFillColorSpace,LC32_CG_HOST(c),LC32_CG_HOST(v)); }
+void CGContextSetFont(CGContextRef c,CGFontRef v) { if(c&&v)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetFont,LC32_CG_HOST(c),LC32_CG_HOST(v)); }
+void CGContextSetFontSize(CGContextRef c,CGFloat v) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetFontSize,LC32_CG_HOST(c),LC32_CG_F32(v)); }
+void CGContextSetGrayStrokeColor(CGContextRef c,CGFloat gray,CGFloat alpha) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetGrayStrokeColor,LC32_CG_HOST(c),LC32_CG_F32(gray),LC32_CG_F32(alpha)); }
+void CGContextSetLineJoin(CGContextRef c,CGLineJoin v) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetLineJoin,LC32_CG_HOST(c),LC32_CG_U32(v)); }
+void CGContextSetMiterLimit(CGContextRef c,CGFloat v) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetMiterLimit,LC32_CG_HOST(c),LC32_CG_F32(v)); }
+void CGContextSetRenderingIntent(CGContextRef c,CGColorRenderingIntent v) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetRenderingIntent,LC32_CG_HOST(c),LC32_CG_U32(v)); }
+void CGContextSetShadow(CGContextRef c,CGSize o,CGFloat blur) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetShadow,LC32_CG_HOST(c),LC32_CG_F32(o.width),LC32_CG_F32(o.height),LC32_CG_F32(blur)); }
+void CGContextSetTextDrawingMode(CGContextRef c,CGTextDrawingMode v) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetTextDrawingMode,LC32_CG_HOST(c),LC32_CG_U32(v)); }
+void CGContextSetTextMatrix(CGContextRef c,CGAffineTransform t) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSetTextMatrix,LC32_CG_HOST(c),LC32_CG_F32(t.a),LC32_CG_F32(t.b),LC32_CG_F32(t.c),LC32_CG_F32(t.d),LC32_CG_F32(t.tx),LC32_CG_F32(t.ty)); }
+'''
+ guest.write_text(g)
+
+x=host.read_text()
+if 'case LC32CoreGraphicsOpContextAddCurveToPoint:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpContextAddCurveToPoint: {
+            if(!RequireCoreGraphicsSlots(call,7))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextAddCurveToPoint(c,SlotCGFloat(call,1),SlotCGFloat(call,2),SlotCGFloat(call,3),SlotCGFloat(call,4),SlotCGFloat(call,5),SlotCGFloat(call,6));return 1;
+        }
+        case LC32CoreGraphicsOpContextAddQuadCurveToPoint: {
+            if(!RequireCoreGraphicsSlots(call,5))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextAddQuadCurveToPoint(c,SlotCGFloat(call,1),SlotCGFloat(call,2),SlotCGFloat(call,3),SlotCGFloat(call,4));return 1;
+        }
+        case LC32CoreGraphicsOpContextBeginTransparencyLayer: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextBeginTransparencyLayer(c,SlotHostObject<CFDictionaryRef>(call,1));return 1;
+        }
+        case LC32CoreGraphicsOpContextEndTransparencyLayer:
+        case LC32CoreGraphicsOpContextEOClip:
+        case LC32CoreGraphicsOpContextEOFillPath:
+        case LC32CoreGraphicsOpContextEndPage: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            if(opcode==LC32CoreGraphicsOpContextEndTransparencyLayer)CGContextEndTransparencyLayer(c);
+            else if(opcode==LC32CoreGraphicsOpContextEOClip)CGContextEOClip(c);
+            else if(opcode==LC32CoreGraphicsOpContextEOFillPath)CGContextEOFillPath(c);
+            else CGContextEndPage(c); SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpContextSetFillColorSpace:
+        case LC32CoreGraphicsOpContextSetFont: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            if(opcode==LC32CoreGraphicsOpContextSetFillColorSpace){CGColorSpaceRef v=SlotHostObject<CGColorSpaceRef>(call,1);if(!v)return 0;CGContextSetFillColorSpace(c,v);}else{CGFontRef v=SlotHostObject<CGFontRef>(call,1);if(!v)return 0;CGContextSetFont(c,v);}return 1;
+        }
+        case LC32CoreGraphicsOpContextSetFontSize:
+        case LC32CoreGraphicsOpContextSetMiterLimit: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0; CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            if(opcode==LC32CoreGraphicsOpContextSetFontSize)CGContextSetFontSize(c,SlotCGFloat(call,1));else CGContextSetMiterLimit(c,SlotCGFloat(call,1));return 1;
+        }
+        case LC32CoreGraphicsOpContextSetGrayStrokeColor: {
+            if(!RequireCoreGraphicsSlots(call,3))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextSetGrayStrokeColor(c,SlotCGFloat(call,1),SlotCGFloat(call,2));return 1;
+        }
+        case LC32CoreGraphicsOpContextSetLineJoin:
+        case LC32CoreGraphicsOpContextSetRenderingIntent:
+        case LC32CoreGraphicsOpContextSetTextDrawingMode: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;u32 v=SlotU32(call,1);
+            if(opcode==LC32CoreGraphicsOpContextSetLineJoin)CGContextSetLineJoin(c,(CGLineJoin)v);
+            else if(opcode==LC32CoreGraphicsOpContextSetRenderingIntent)CGContextSetRenderingIntent(c,(CGColorRenderingIntent)v);
+            else CGContextSetTextDrawingMode(c,(CGTextDrawingMode)v);return 1;
+        }
+        case LC32CoreGraphicsOpContextSetShadow: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextSetShadow(c,CGSizeMake(SlotCGFloat(call,1),SlotCGFloat(call,2)),SlotCGFloat(call,3));return 1;
+        }
+        case LC32CoreGraphicsOpContextSetTextMatrix: {
+            if(!RequireCoreGraphicsSlots(call,7))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGContextSetTextMatrix(c,CGAffineTransformMake(SlotCGFloat(call,1),SlotCGFloat(call,2),SlotCGFloat(call,3),SlotCGFloat(call,4),SlotCGFloat(call,5),SlotCGFloat(call,6)));return 1;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('second host switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1)
+ host.write_text(x)
+print('CoreGraphics: added 17 typed context state exports')
