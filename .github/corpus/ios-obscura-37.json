@@ -1,0 +1,264 @@
+{
+  "source": "https://archive.org/download/iOSObscura",
+  "apps": [
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.limasky.doodlejumpes/Doodle Jump-(com.limasky.doodlejumpes)-1.0.3-(iOS_4.3)-5c8faadb2657d3462930986fb59f6fc2.ipa",
+      "size": 8876740,
+      "md5": "5c8faadb2657d3462930986fb59f6fc2",
+      "sha1": "5f27376cce94880a85a8dd3f6414299c656d33b2"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.mojang.minecraftpe/Minecraft PE-(com.mojang.minecraftpe)-0.3.0.0-(iOS_4.3)-66c950ad2e6b7fc764aa16fc42c23050.ipa",
+      "size": 1992482,
+      "md5": "66c950ad2e6b7fc764aa16fc42c23050",
+      "sha1": "b4de691019829cf2ea2f795bff91a60a3f3c43d8"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/UBI.088.WW/Rayman Run-(UBI.088.WW)-1.0.2-(iOS_4.0)-2114cda8e28d554f97e7c5364ad8bd21.ipa",
+      "size": 48354162,
+      "md5": "2114cda8e28d554f97e7c5364ad8bd21",
+      "sha1": "ac531829ee6ca0590bfcc1ebca766d7a9ba4b670"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.rovio.BadPiggies/Bad Piggies-(com.rovio.BadPiggies)-1.0.0-(iOS_4.0)-48d1257e25446886c8245887c70cfbcb.ipa",
+      "size": 35294324,
+      "md5": "48d1257e25446886c8245887c70cfbcb",
+      "sha1": "297d075297064decacceeb7a4af04485856674b5"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.supercell.magic/Clash of Clans-(com.supercell.magic)-3.25-(iOS_4.3)-652d27f6e5ec66d298a2533987bd5ab2.ipa",
+      "size": 43412326,
+      "md5": "652d27f6e5ec66d298a2533987bd5ab2",
+      "sha1": "e0907077de9402b16808c7beaced807473621ce2"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.fingersoft.hillclimbracing/Hill Climb-(com.fingersoft.hillclimbracing)-1.5.4-(iOS_4.3)-8984dbdcd608bfce9ccb3f1b1278b336.ipa",
+      "size": 8600114,
+      "md5": "8984dbdcd608bfce9ccb3f1b1278b336",
+      "sha1": "b3fb77a44eb0304fd3c4f41fcf7128b07f440839"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.midasplayer.apps.candycrushsaga/Candy Crush-(com.midasplayer.apps.candycrushsaga)-1.14.0-(iOS_4.3)-dd37c83cc4e3ce1ada163ca5c310b097.ipa",
+      "size": 48682471,
+      "md5": "dd37c83cc4e3ce1ada163ca5c310b097",
+      "sha1": "5272e0a224a92ea736bb159f96db906054457302"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.madfingergames.shadowgun/ShadowGun-(com.madfingergames.shadowgun)-1.1.3-(iOS_4.1)-d992e91c425dfdcb6532e9affa5326c9.ipa",
+      "size": 204402073,
+      "md5": "d992e91c425dfdcb6532e9affa5326c9",
+      "sha1": "b67c5c808d7558cc06f6a91d8b364c0e43cc8ce5"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/com.2dboy.worldofgooiphone/World of Goo-(com.2dboy.worldofgooiphone)-1.5-(iOS_4.3)-df76479e937cc280ba928625577876d0.ipa",
+      "size": 95803349,
+      "md5": "df76479e937cc280ba928625577876d0",
+      "sha1": "0228a3efb4dd7830aa064e163099336d8087158f"
+    },
+    {
+      "deployment_group": "iOS 4",
+      "name": "iOS 4/org.akamatsu.AirCamera/AirCamera-(org.akamatsu.AirCamera)-1.1.0-(iOS_4.0)-f7acde1dd2d52182854d0244ff15dc54.ipa",
+      "size": 226638,
+      "md5": "f7acde1dd2d52182854d0244ff15dc54",
+      "sha1": "03bace32d27cd56e3fd4b6c77284f8440f83d843"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.ea.pvzfree.bv/Plants vs. Zombies Free-(com.ea.pvzfree.bv)-1.0.5-(iOS_5.1.1)-1cba9d97a3b9e64c53e659d6d5b43712.ipa",
+      "size": 65443908,
+      "md5": "1cba9d97a3b9e64c53e659d6d5b43712",
+      "sha1": "c1b68f5976edebc8c41e121fb9a65145941f570f"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.popcap.ios.PvZ2/ios-(com.popcap.ios.PvZ2)-1.0.226789-(iOS_5.1)-fe4340dd257d1e737c181e21b4450d97.ipa",
+      "size": 40513692,
+      "md5": "fe4340dd257d1e737c181e21b4450d97",
+      "sha1": "b597ebe5c5431b773ba994d4da2a191f36351cd3"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.fc2.web.fujicubesoft.ManyBricksBreaker/Many Bricks-(com.fc2.web.fujicubesoft.ManyBricksBreaker)-1.1.7-(iOS_5.1.1)-2155975ae773c849028c1ffd7b282284.ipa",
+      "size": 957620,
+      "md5": "2155975ae773c849028c1ffd7b282284",
+      "sha1": "a4c85f5cbd1a3c9b9e312684ef966d64e1a268e5"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.google.Authenticator/Authenticator-(com.google.Authenticator)-2.1.0.2212-(iOS_5.0)-438f7ab717924acbbe360615bc317976.ipa",
+      "size": 1058541,
+      "md5": "438f7ab717924acbbe360615bc317976",
+      "sha1": "4212752084260971602a90c498612419d95e1da7"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.imect.djplayer-default/DJ Player-(com.imect.djplayer-default)-4.5-(iOS_5.0)-8ba11e784d8d1f55a812a00f8cd178ba.ipa",
+      "size": 3281220,
+      "md5": "8ba11e784d8d1f55a812a00f8cd178ba",
+      "sha1": "028f6aec6219905be09082f1d4150fe22a8302de"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/nl.philips.sc.Vital-Signs-Camera/VitalSigns-(nl.philips.sc.Vital-Signs-Camera)-236-(iOS_5.0)-690cd9b2b9f5e0ed69b8e323fe6526ce.ipa",
+      "size": 3191104,
+      "md5": "690cd9b2b9f5e0ed69b8e323fe6526ce",
+      "sha1": "d41fd363cfc94d1d336cfafd9b4d123f933ad8b0"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/com.scottgames.20useless/20 Useless Apps-(com.scottgames.20useless)-1.0-(iOS_5.1)-020fc71fd8910e5065b4ed401457af52.ipa",
+      "size": 2994261,
+      "md5": "020fc71fd8910e5065b4ed401457af52",
+      "sha1": "2eaa128eeac5f5db6a38a86e38367ba3fa13e626"
+    },
+    {
+      "deployment_group": "iOS 5",
+      "name": "iOS 5/uk.co.bbc.newsuk/BBC News-(uk.co.bbc.newsuk)-2.1.4-(iOS_5.0)-f13714330066b580b56cfbe75f4d2637.ipa",
+      "size": 2698420,
+      "md5": "f13714330066b580b56cfbe75f4d2637",
+      "sha1": "01dc25e32931c7fe441344f4ec3f7a0d07ca904e"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.dotgears.flap/Flappy Bird-(com.dotgears.flap)-1.1.0-(iOS_6.0)-40c8a738bc9b047104180636dc136745.ipa",
+      "size": 925121,
+      "md5": "40c8a738bc9b047104180636dc136745",
+      "sha1": "c618ef4656bcbd0ecb4a333a6a1d62c88324fd35"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.rileytestut.enterprise.GBA4iOS.Original/GBA4iOS-(com.rileytestut.enterprise.GBA4iOS.Original)-1.6.2-(iOS_6.0)-b856fe2b3f6f34e9b61d9bba3c7d8d01.ipa",
+      "size": 5840179,
+      "md5": "b856fe2b3f6f34e9b61d9bba3c7d8d01",
+      "sha1": "dad8a0afc0f7ac69e12a459fe9ce0f393d6f08d6"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/net.openvpn.connect.app/OpenVPN-(net.openvpn.connect.app)-1.1.04-(iOS_6.0)-649313a1b51f9d21abf4658fadde008b.ipa",
+      "size": 1555865,
+      "md5": "649313a1b51f9d21abf4658fadde008b",
+      "sha1": "ee2d5139f09d29e0ad1d3d3c454d40fd8c810019"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.pyspuc.audiofilter/AudioFilter-(com.pyspuc.audiofilter)-2.1.50-(iOS_6.0)-bb4de46c3a8f189d573c1a1d3a0c8b9a.ipa",
+      "size": 3524263,
+      "md5": "bb4de46c3a8f189d573c1a1d3a0c8b9a",
+      "sha1": "6242e4762479f23260425d4e0bea693b775c9550"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.bigduckgames.flow/Flow Free-(com.bigduckgames.flow)-2.5.1-(iOS_6.0)-a8a7fc08c62790b942fb086af804f121.ipa",
+      "size": 4111980,
+      "md5": "a8a7fc08c62790b942fb086af804f121",
+      "sha1": "f03e1f57b6faf943624543ee1301d9f20b0f847d"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.andyqua.CubeRunner/Cube Runner-(com.andyqua.CubeRunner)-2.4-(iOS_6.0)-5ea8d7144820a14cccff221418bc7849.ipa",
+      "size": 7356512,
+      "md5": "5ea8d7144820a14cccff221418bc7849",
+      "sha1": "6bfd8ac5680455f2b2cf8988c122f9c351bebb30"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.shazam.Shazam/Shazam-(com.shazam.Shazam)-581-(iOS_6.0)-47905b841cab7b1903c4c190c891da0f.ipa",
+      "size": 7192836,
+      "md5": "47905b841cab7b1903c4c190c891da0f",
+      "sha1": "266d7cdbcf261e00ab4126f992df074122896db7"
+    },
+    {
+      "deployment_group": "iOS 6",
+      "name": "iOS 6/com.sometimeswefly.littlealchemy/Little Alchemy-(com.sometimeswefly.littlealchemy)-1.6.8-(iOS_6.0)-02114b7e444ed1c627d5221cdfb446aa.ipa",
+      "size": 6139183,
+      "md5": "02114b7e444ed1c627d5221cdfb446aa",
+      "sha1": "bb8d0102030bf7a0a1906a944209aef240fa2432"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/tv.twitch/Twitch-(tv.twitch)-201503171-(iOS_7.0)-a5f22e1940d7bddcc6ffe3a93be93556.ipa",
+      "size": 2535147,
+      "md5": "a5f22e1940d7bddcc6ffe3a93be93556",
+      "sha1": "f051f0992abef48f65532b62402d154fde0e9882"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/com.reddit.Reddit/Reddit-(com.reddit.Reddit)-1510-(iOS_7.1)-ac3e2bf121119c5bb699cead4ebaa9d6.ipa",
+      "size": 2751471,
+      "md5": "ac3e2bf121119c5bb699cead4ebaa9d6",
+      "sha1": "0213cb675a42aeef3e3054b4b2437a2655c7b58f"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/com.kairos.duet/duet-(com.kairos.duet)-4-(iOS_7.0)-3beca7a6bfb3be9f6605ea71fb731065.ipa",
+      "size": 5286141,
+      "md5": "3beca7a6bfb3be9f6605ea71fb731065",
+      "sha1": "6dcec19a66eb97e030cf4da07f7ce3dbad6cc937"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/com.patatap.iphone/Patatap-(com.patatap.iphone)-1.1-(iOS_7.1)-e45d5ccf99af7040af4eccfd46ccbeb6.ipa",
+      "size": 4302600,
+      "md5": "e45d5ccf99af7040af4eccfd46ccbeb6",
+      "sha1": "d5256d999f845c5159c820eb59cfc4ab2da556c3"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/com.agilebits.onepassword-ios/1Password-(com.agilebits.onepassword-ios)-405105-(iOS_7.0)-e36a2ed44decd43a094f94b688759788.ipa",
+      "size": 5887017,
+      "md5": "e36a2ed44decd43a094f94b688759788",
+      "sha1": "fd6225d79923bde4e0b3f9ee5c9d36700bf56ca8"
+    },
+    {
+      "deployment_group": "iOS 7",
+      "name": "iOS 7/de.icab.iCabMobile/iCabMobile-(de.icab.iCabMobile)-8.5.6-(iOS_7.0)-3a608fa9225ac3fbfd58a7ae6f2d57a0.ipa",
+      "size": 5799693,
+      "md5": "3a608fa9225ac3fbfd58a7ae6f2d57a0",
+      "sha1": "b9ea08b25e6c9ab24b78341bd4970857485db4a4"
+    },
+    {
+      "deployment_group": "iOS 8",
+      "name": "iOS 8/is.workflow.my.app/Workflow-(is.workflow.my.app)-150-(iOS_8.0)-3168823072bc639cbc48292357f56256.ipa",
+      "size": 8317456,
+      "md5": "3168823072bc639cbc48292357f56256",
+      "sha1": "2f209b0e83aae293f8b46c2755c80b7811327a3b"
+    },
+    {
+      "deployment_group": "iOS 8",
+      "name": "iOS 8/com.finalwire.aida64/aida64-(com.finalwire.aida64)-747-(iOS_8.0)-63ac628b0fce4e2b95423dddb13aa49b.ipa",
+      "size": 7673117,
+      "md5": "63ac628b0fce4e2b95423dddb13aa49b",
+      "sha1": "07ae3658addeeef9ea298b8a4589cb46f8dfa39c"
+    },
+    {
+      "deployment_group": "iOS 8",
+      "name": "iOS 8/net.naan.TwitterFon/Echofon-(net.naan.TwitterFon)-1392-(iOS_8.1)-0e0aa18747ec4f578f35c5d5bb1c0a84.ipa",
+      "size": 11268467,
+      "md5": "0e0aa18747ec4f578f35c5d5bb1c0a84",
+      "sha1": "8adb6e56d9de940cafbfcf82ca106daeff87da8b"
+    },
+    {
+      "deployment_group": "iOS 8",
+      "name": "iOS 8/com.google.atapspotlightstories/Stories-(com.google.atapspotlightstories)-1-(iOS_8.0)-74ed42b1425b67d21e508353dfc7844d.ipa",
+      "size": 11365735,
+      "md5": "74ed42b1425b67d21e508353dfc7844d",
+      "sha1": "cd32ab42f5197bd0ad937fb367dbd8a87ca96de7"
+    },
+    {
+      "deployment_group": "iOS 8",
+      "name": "iOS 8/com.firemarkstudio.oofpianoforroblox/Oof Piano-(com.firemarkstudio.oofpianoforroblox)-1.6-(iOS_8.0)-c60bb92ea9ea92d569402f7e401ea8aa.ipa",
+      "size": 2779701,
+      "md5": "c60bb92ea9ea92d569402f7e401ea8aa",
+      "sha1": "f11df72c0907ca964e47376d400178f72199f127"
+    }
+  ]
+}

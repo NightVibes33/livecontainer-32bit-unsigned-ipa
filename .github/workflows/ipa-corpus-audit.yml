@@ -1,0 +1,70 @@
+name: Audit 37 representative 32-bit IPAs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/corpus/ios-obscura-37.json'
+      - '.github/scripts/audit-ipa-corpus.py'
+      - '.github/scripts/aggregate-ipa-corpus.py'
+      - '.github/workflows/ipa-corpus-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit corpus shard ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install Mach-O analyzer
+        run: python -m pip install 'lief==0.17.5'
+      - name: Download, verify and audit shard
+        run: |
+          set -euxo pipefail
+          mkdir -p corpus-output
+          python .github/scripts/audit-ipa-corpus.py \
+            --manifest .github/corpus/ios-obscura-37.json \
+            --shard-index '${{ matrix.shard }}' \
+            --shard-count 5 \
+            --output "corpus-output/shard-${{ matrix.shard }}.json"
+      - name: Upload trace report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ipa-corpus-shard-${{ matrix.shard }}
+          path: corpus-output/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate:
+    name: Require complete corpus and aggregate traces
+    if: always()
+    needs: audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ipa-corpus-shard-*
+          path: corpus-results
+          merge-multiple: true
+      - name: Aggregate and enforce completeness
+        run: python .github/scripts/aggregate-ipa-corpus.py
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ipa-corpus-summary
+          path: |
+            corpus-summary.json
+            corpus-summary.md
+          retention-days: 90
