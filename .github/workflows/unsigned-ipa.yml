@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '24'
+      LIVEEXEC32_BUILD_REVISION: '25'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -225,6 +225,15 @@ jobs:
           python3 .github/scripts/patch-liveexec32-thread-info.py
           python3 .github/scripts/patch-liveexec32-vm-read-overwrite.py
           python3 .github/scripts/patch-liveexec32-memory-entry.py
+
+          # Execute the same guest-memory DSP implementation natively against
+          # an independent DFT oracle before cross-compiling it for ARM32.
+          xcrun clang -fmodules -O2 \
+            build/LiveExec32/GuestFrameworks/Accelerate/Accelerate.m \
+            .github/tests/accelerate-behavior.c \
+            -framework Accelerate -framework Foundation -o build/accelerate-behavior
+          build/accelerate-behavior
+
           gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
