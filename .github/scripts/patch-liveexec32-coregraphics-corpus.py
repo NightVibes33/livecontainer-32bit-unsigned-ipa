@@ -626,3 +626,98 @@ if 'case LC32CoreGraphicsOpContextBeginPage:' not in x:
  if anchor not in x:raise SystemExit('seventh switch anchor missing')
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
 print('CoreGraphics: added 12 typed image/layer/shading exports')
+
+
+# eighth typed text path dictionary batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpColorSpaceGetColorTableCount = 175' not in h:
+ anchor='    LC32CoreGraphicsOpShadingCreateRadial = 174,\n'
+ if anchor not in h:raise SystemExit('eighth opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpColorSpaceGetColorTableCount = 175,
+    LC32CoreGraphicsOpColorSpaceCopyColorTable = 176,
+    LC32CoreGraphicsOpFontGetGlyphAdvances = 177,
+    LC32CoreGraphicsOpContextSelectFont = 178,
+    LC32CoreGraphicsOpContextShowTextAtPoint = 179,
+    LC32CoreGraphicsOpContextShowGlyphsAtPoint = 180,
+    LC32CoreGraphicsOpContextShowGlyphsAtPositions = 181,
+    LC32CoreGraphicsOpPathCreateCopyByDashingPath = 182,
+    LC32CoreGraphicsOpPathCreateCopyByStrokingPath = 183,
+    LC32CoreGraphicsOpPointMakeWithDictionaryRepresentation = 184,
+    LC32CoreGraphicsOpRectMakeWithDictionaryRepresentation = 185,
+    LC32CoreGraphicsOpSizeCreateDictionaryRepresentation = 186,
+    LC32CoreGraphicsOpSizeMakeWithDictionaryRepresentation = 187,
+''');header.write_text(h)
+
+g=guest.read_text()
+if 'size_t CGColorSpaceGetColorTableCount(' not in g:
+ g += r'''
+size_t CGColorSpaceGetColorTableCount(CGColorSpaceRef s) { return s?(size_t)LC32_CG_CALL(LC32CoreGraphicsOpColorSpaceGetColorTableCount,LC32_CG_HOST(s)):0; }
+void CGColorSpaceGetColorTable(CGColorSpaceRef s,uint8_t *table) { if(s&&table)(void)LC32_CG_CALL(LC32CoreGraphicsOpColorSpaceCopyColorTable,LC32_CG_HOST(s),LC32_CG_U32((uintptr_t)table)); }
+bool CGFontGetGlyphAdvances(CGFontRef f,const CGGlyph *glyphs,size_t n,int *advances) { return f&&glyphs&&advances&&n&&LC32_CG_CALL(LC32CoreGraphicsOpFontGetGlyphAdvances,LC32_CG_HOST(f),LC32_CG_U32((uintptr_t)glyphs),LC32_CG_U32(n),LC32_CG_U32((uintptr_t)advances)); }
+void CGContextSelectFont(CGContextRef c,const char *name,CGFloat size,CGTextEncoding encoding) { if(!c||!name)return;size_t n=strnlen(name,LC32CoreGraphicsMaximumFilenameBytes+1);if(n<=LC32CoreGraphicsMaximumFilenameBytes)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextSelectFont,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)name),LC32_CG_U32(n),LC32_CG_F32(size),LC32_CG_U32(encoding)); }
+void CGContextShowTextAtPoint(CGContextRef c,CGFloat x,CGFloat y,const char *text,size_t n) { if(c&&text&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextShowTextAtPoint,LC32_CG_HOST(c),LC32_CG_F32(x),LC32_CG_F32(y),LC32_CG_U32((uintptr_t)text),LC32_CG_U32(n)); }
+void CGContextShowGlyphsAtPoint(CGContextRef c,CGFloat x,CGFloat y,const CGGlyph *glyphs,size_t n) { if(c&&glyphs&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextShowGlyphsAtPoint,LC32_CG_HOST(c),LC32_CG_F32(x),LC32_CG_F32(y),LC32_CG_U32((uintptr_t)glyphs),LC32_CG_U32(n)); }
+void CGContextShowGlyphsAtPositions(CGContextRef c,const CGGlyph *glyphs,const CGPoint *positions,size_t n) { if(c&&glyphs&&positions&&n)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextShowGlyphsAtPositions,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)glyphs),LC32_CG_U32((uintptr_t)positions),LC32_CG_U32(n)); }
+CGPathRef CGPathCreateCopyByDashingPath(CGPathRef p,const CGAffineTransform *t,CGFloat phase,const CGFloat *lengths,size_t n) { return p&&lengths&&n?(CGPathRef)LC32_CG_CALL(LC32CoreGraphicsOpPathCreateCopyByDashingPath,LC32_CG_HOST(p),LC32_CG_U32(t!=NULL),t?LC32_CG_F32(t->a):0,t?LC32_CG_F32(t->b):0,t?LC32_CG_F32(t->c):0,t?LC32_CG_F32(t->d):0,t?LC32_CG_F32(t->tx):0,t?LC32_CG_F32(t->ty):0,LC32_CG_F32(phase),LC32_CG_U32((uintptr_t)lengths),LC32_CG_U32(n)):NULL; }
+CGPathRef CGPathCreateCopyByStrokingPath(CGPathRef p,const CGAffineTransform *t,CGFloat width,CGLineCap cap,CGLineJoin join,CGFloat miter) { return p?(CGPathRef)LC32_CG_CALL(LC32CoreGraphicsOpPathCreateCopyByStrokingPath,LC32_CG_HOST(p),LC32_CG_U32(t!=NULL),t?LC32_CG_F32(t->a):0,t?LC32_CG_F32(t->b):0,t?LC32_CG_F32(t->c):0,t?LC32_CG_F32(t->d):0,t?LC32_CG_F32(t->tx):0,t?LC32_CG_F32(t->ty):0,LC32_CG_F32(width),LC32_CG_U32(cap),LC32_CG_U32(join),LC32_CG_F32(miter)):NULL; }
+bool CGPointMakeWithDictionaryRepresentation(CFDictionaryRef d,CGPoint *p) { return d&&p&&LC32_CG_CALL(LC32CoreGraphicsOpPointMakeWithDictionaryRepresentation,LC32_CG_HOST(d),LC32_CG_U32((uintptr_t)p)); }
+bool CGRectMakeWithDictionaryRepresentation(CFDictionaryRef d,CGRect *r) { return d&&r&&LC32_CG_CALL(LC32CoreGraphicsOpRectMakeWithDictionaryRepresentation,LC32_CG_HOST(d),LC32_CG_U32((uintptr_t)r)); }
+CFDictionaryRef CGSizeCreateDictionaryRepresentation(CGSize s) { return (CFDictionaryRef)LC32_CG_CALL(LC32CoreGraphicsOpSizeCreateDictionaryRepresentation,LC32_CG_F32(s.width),LC32_CG_F32(s.height)); }
+bool CGSizeMakeWithDictionaryRepresentation(CFDictionaryRef d,CGSize *s) { return d&&s&&LC32_CG_CALL(LC32CoreGraphicsOpSizeMakeWithDictionaryRepresentation,LC32_CG_HOST(d),LC32_CG_U32((uintptr_t)s)); }
+''';guest.write_text(g)
+
+x=host.read_text()
+if 'bool ReadGuestCoreGraphicsGlyphs(' not in x:
+ anchor='} // namespace\n\n__BEGIN_DECLS'
+ helper=r'''bool ReadGuestCoreGraphicsGlyphs(u32 address,size_t count,std::vector<CGGlyph>& out) {
+    if(!address||!count||count>1024*1024||count>SIZE_MAX/sizeof(CGGlyph)||static_cast<uint64_t>(address)+count*sizeof(CGGlyph)>static_cast<uint64_t>(UINT32_MAX)+1)return false;
+    out.resize(count);return Dynarmic_mem_1read(address,count*sizeof(CGGlyph),reinterpret_cast<char *>(out.data()))==0;
+}
+bool ReadGuestCoreGraphicsBytes(u32 address,size_t count,std::vector<char>& out) {
+    if(!address||!count||count>LC32CoreGraphicsMaximumFilenameBytes||static_cast<uint64_t>(address)+count>static_cast<uint64_t>(UINT32_MAX)+1)return false;
+    out.resize(count+1);if(Dynarmic_mem_1read(address,count,out.data())!=0)return false;out[count]=0;return true;
+}
+
+'''
+ if anchor not in x:raise SystemExit('eighth namespace anchor missing')
+ x=x.replace(anchor,helper+anchor,1)
+if 'case LC32CoreGraphicsOpColorSpaceGetColorTableCount:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpColorSpaceGetColorTableCount: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGColorSpaceRef s=SlotHostObject<CGColorSpaceRef>(call,0);return s?static_cast<u32>(CGColorSpaceGetColorTableCount(s)):0;
+        }
+        case LC32CoreGraphicsOpColorSpaceCopyColorTable: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGColorSpaceRef s=SlotHostObject<CGColorSpaceRef>(call,0);if(!s)return 0;size_t entries=CGColorSpaceGetColorTableCount(s),components=CGColorSpaceGetNumberOfComponents(s);if(!entries||!components||entries>SIZE_MAX/components)return 0;size_t bytes=entries*components;std::vector<uint8_t> table(bytes);CGColorSpaceGetColorTable(s,table.data());return Dynarmic_mem_1write(SlotU32(call,1),bytes,reinterpret_cast<char *>(table.data()))==0;
+        }
+        case LC32CoreGraphicsOpFontGetGlyphAdvances: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGFontRef f=SlotHostObject<CGFontRef>(call,0);size_t n=SlotU32(call,2);std::vector<CGGlyph> glyphs;if(!f||!ReadGuestCoreGraphicsGlyphs(SlotU32(call,1),n,glyphs)||n>SIZE_MAX/sizeof(int))return 0;std::vector<int> advances(n);if(!CGFontGetGlyphAdvances(f,glyphs.data(),n,advances.data()))return 0;return Dynarmic_mem_1write(SlotU32(call,3),n*sizeof(int),reinterpret_cast<char *>(advances.data()))==0;
+        }
+        case LC32CoreGraphicsOpContextSelectFont: {
+            if(!RequireCoreGraphicsSlots(call,5))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);std::vector<char> name;if(!c||!ReadGuestCoreGraphicsBytes(SlotU32(call,1),SlotU32(call,2),name))return 0;CGContextSelectFont(c,name.data(),SlotCGFloat(call,3),(CGTextEncoding)SlotU32(call,4));return 1;
+        }
+        case LC32CoreGraphicsOpContextShowTextAtPoint: {
+            if(!RequireCoreGraphicsSlots(call,5))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);std::vector<char> text;if(!c||!ReadGuestCoreGraphicsBytes(SlotU32(call,3),SlotU32(call,4),text))return 0;CGContextShowTextAtPoint(c,SlotCGFloat(call,1),SlotCGFloat(call,2),text.data(),SlotU32(call,4));SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpContextShowGlyphsAtPoint:
+        case LC32CoreGraphicsOpContextShowGlyphsAtPositions: {
+            const bool positions=opcode==LC32CoreGraphicsOpContextShowGlyphsAtPositions;if(!RequireCoreGraphicsSlots(call,positions?4:5))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);size_t n=SlotU32(call,positions?3:4);std::vector<CGGlyph> glyphs;if(!c||!ReadGuestCoreGraphicsGlyphs(SlotU32(call,positions?1:3),n,glyphs))return 0;if(positions){std::vector<CGPoint> p;if(!ReadGuestCoreGraphicsPoints(SlotU32(call,2),n,p))return 0;CGContextShowGlyphsAtPositions(c,glyphs.data(),p.data(),n);}else CGContextShowGlyphsAtPoint(c,SlotCGFloat(call,1),SlotCGFloat(call,2),glyphs.data(),n);SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpPathCreateCopyByDashingPath: {
+            if(!RequireCoreGraphicsSlots(call,11))return 0;CGPathRef p=SlotHostObject<CGPathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;size_t n=SlotU32(call,10);std::vector<CGFloat> lengths;const CGFloat *v=nullptr;if(!ReadGuestCGFloatArray(SlotU32(call,9),n,false,lengths,v))return 0;CGPathRef r=CGPathCreateCopyByDashingPath(p,t,SlotCGFloat(call,8),v,n);return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpPathCreateCopyByStrokingPath: {
+            if(!RequireCoreGraphicsSlots(call,12))return 0;CGPathRef p=SlotHostObject<CGPathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;CGPathRef r=CGPathCreateCopyByStrokingPath(p,t,SlotCGFloat(call,8),(CGLineCap)SlotU32(call,9),(CGLineJoin)SlotU32(call,10),SlotCGFloat(call,11));return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpPointMakeWithDictionaryRepresentation:
+        case LC32CoreGraphicsOpRectMakeWithDictionaryRepresentation:
+        case LC32CoreGraphicsOpSizeMakeWithDictionaryRepresentation: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CFDictionaryRef d=SlotHostObject<CFDictionaryRef>(call,0);if(!d)return 0;if(opcode==LC32CoreGraphicsOpPointMakeWithDictionaryRepresentation){CGPoint v;if(!CGPointMakeWithDictionaryRepresentation(d,&v))return 0;CGFloat a[2]={v.x,v.y};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),a,2);}if(opcode==LC32CoreGraphicsOpRectMakeWithDictionaryRepresentation){CGRect v;if(!CGRectMakeWithDictionaryRepresentation(d,&v))return 0;CGFloat a[4]={v.origin.x,v.origin.y,v.size.width,v.size.height};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),a,4);}CGSize v;if(!CGSizeMakeWithDictionaryRepresentation(d,&v))return 0;CGFloat a[2]={v.width,v.height};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),a,2);
+        }
+        case LC32CoreGraphicsOpSizeCreateDictionaryRepresentation: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CFDictionaryRef r=CGSizeCreateDictionaryRepresentation(CGSizeMake(SlotCGFloat(call,0),SlotCGFloat(call,1)));return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('eighth switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
+print('CoreGraphics: added 13 typed text/path/dictionary exports')
