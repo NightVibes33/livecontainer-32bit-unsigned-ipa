@@ -61,13 +61,22 @@ def main():
                 apps_by_requirement[(library, symbol)].add(app_id)
             weak_by_library[library].update(groups["weak"])
     exports = {}; reexports = {}; image_errors = {}
-    for library in sorted(all_libraries):
+    # Inspect the contract images, then recursively inspect every LC_REEXPORT_DYLIB
+    # target. Umbrellas such as libSystem.B contain almost no direct exports.
+    pending = list(sorted(all_libraries))
+    inspected = set()
+    while pending:
+        library = pending.pop(0)
+        if library in inspected:
+            continue
+        inspected.add(library)
         image = root / library.lstrip("/")
         if not image.is_file():
             continue
         try:
             exports[library] = macho_exports(image)
             reexports[library] = macho_reexports(image)
+            pending.extend(sorted(reexports[library] - inspected))
         except Exception as exc:
             image_errors[library] = str(exc)
     def surface(library, seen=None):
