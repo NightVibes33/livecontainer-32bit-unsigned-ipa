@@ -29,6 +29,9 @@ constants = {
         ('AVVideoProfileLevelH264High40', 'string'),
         ('AVVideoProfileLevelKey', 'string'),
         ('AVVideoWidthKey', 'string'),
+        ('AVAssetExportPresetHighestQuality', 'string'),
+        ('AVCaptureDeviceWasConnectedNotification', 'string'),
+        ('AVCaptureDeviceWasDisconnectedNotification', 'string'),
     ],
     'Accounts': [
         ('ACAccountStoreDidChangeNotification', 'string'),
@@ -68,6 +71,11 @@ constants = {
         ('kCFStreamPropertyHTTPFinalURL', 'string'),
         ('kCFStreamPropertyHTTPRequestBytesWrittenCount', 'string'),
         ('kCFStreamPropertySSLPeerTrust', 'string'),
+        ('kCFHTTPAuthenticationSchemeDigest', 'string'),
+        ('kCFStreamPropertyHTTPProxyHost', 'string'),
+        ('kCFStreamPropertyHTTPProxyPort', 'string'),
+        ('kCFStreamPropertyHTTPSProxyHost', 'string'),
+        ('kCFStreamPropertyHTTPSProxyPort', 'string'),
     ],
     'CoreBluetooth': [
         ('CBAdvertisementDataManufacturerDataKey', 'string'),
@@ -90,6 +98,8 @@ constants = {
         ('NSSQLiteManualVacuumOption', 'string'),
         ('NSSQLitePragmasOption', 'string'),
         ('NSUpdatedObjectsKey', 'string'),
+        ('NSDeletedObjectsKey', 'string'),
+        ('NSManagedObjectContextWillSaveNotification', 'string'),
     ],
     'CoreFoundation': [
         ('kCFStreamPropertySOCKSPassword', 'string'),
@@ -100,9 +110,13 @@ constants = {
         ('kCFStreamPropertySocketSecurityLevel', 'string'),
         ('kCFStringTransformToLatin', 'string'),
     ],
+    'CoreGraphics': [
+        ('kCGColorSpaceSRGB', 'string'),
+    ],
     'CoreImage': [
         ('kCIInputImageKey', 'string'),
         ('kCIOutputImageKey', 'string'),
+        ('kCIInputScaleKey', 'string'),
     ],
     'CoreLocation': [
         ('kCLErrorDomain', 'string'),
@@ -150,6 +164,11 @@ constants = {
         ('NSURLAuthenticationMethodClientCertificate', 'string'),
         ('NSURLErrorFailingURLPeerTrustErrorKey', 'string'),
         ('NSUbiquitousKeyValueStoreChangedKeysKey', 'string'),
+        ('NSMetadataItemFSNameKey', 'string'),
+        ('NSMetadataQueryUbiquitousDocumentsScope', 'string'),
+        ('NSURLAuthenticationMethodHTTPBasic', 'string'),
+        ('NSURLAuthenticationMethodHTTPDigest', 'string'),
+        ('NSURLSessionDownloadTaskResumeData', 'string'),
     ],
     'GLKit': [
         ('GLKTextureLoaderOriginBottomLeft', 'string'),
@@ -221,6 +240,10 @@ constants = {
         ('MPMediaLibraryDidChangeNotification', 'string'),
         ('MPMediaPlaylistPropertyName', 'string'),
         ('MPMediaPlaylistPropertyPersistentID', 'string'),
+        ('MPMediaPlaybackIsPreparedToPlayDidChangeNotification', 'string'),
+        ('MPMoviePlayerThumbnailErrorKey', 'string'),
+        ('MPMoviePlayerThumbnailImageKey', 'string'),
+        ('MPMoviePlayerThumbnailImageRequestDidFinishNotification', 'string'),
     ],
     'MobileCoreServices': [
         ('kUTTagClassFilenameExtension', 'string'),
@@ -284,13 +307,16 @@ constants = {
         ('kSecMatchPolicy', 'string'),
         ('kSecPrivateKeyAttrs', 'string'),
         ('kSecPublicKeyAttrs', 'string'),
+        ('kSecAttrKeyClassPrivate', 'string'),
     ],
     'Social': [
         ('SLServiceTypeSinaWeibo', 'string'),
+        ('SLServiceTypeTencentWeibo', 'string'),
     ],
     'StoreKit': [
         ('SKStoreProductParameterAffiliateToken', 'string'),
         ('SKStoreProductParameterCampaignToken', 'string'),
+        ('SKStoreProductParameterProviderToken', 'string'),
     ],
     'UIKit': [
         ('UIAccessibilityVoiceOverStatusChanged', 'string'),
@@ -300,13 +326,18 @@ constants = {
         ('UICollectionElementKindSectionHeader', 'string'),
         ('UIPasteboardTypeListURL', 'string'),
         ('UITableViewIndexSearch', 'string'),
+        ('UIKeyInputDownArrow', 'string'),
+        ('UIKeyInputEscape', 'string'),
+        ('UIKeyInputLeftArrow', 'string'),
+        ('UIKeyInputRightArrow', 'string'),
+        ('UIKeyInputUpArrow', 'string'),
     ],
 }
 
 flat = [(framework, symbol) for framework, entries in constants.items()
         for symbol, _ in entries]
-if len(flat) != 243 or len(set(flat)) != len(flat):
-    raise SystemExit("corpus object-constant manifest must contain 243 unique exports")
+if len(flat) != 272 or len(set(flat)) != len(flat):
+    raise SystemExit("corpus object-constant manifest must contain 272 unique exports")
 
 source_header = r'''#import <Foundation/Foundation.h>
 #import <Foundation/Foundation+LC32.h>
