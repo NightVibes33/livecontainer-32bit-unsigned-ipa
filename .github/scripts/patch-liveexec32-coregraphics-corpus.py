@@ -7,25 +7,25 @@ guest = ROOT/'GuestFrameworks/CoreGraphics/CoreGraphics.m'
 host = ROOT/'HostFrameworks/CoreGraphics/CoreGraphics.mm'
 
 h=header.read_text()
-if 'LC32CoreGraphicsOpBitmapContextGetHeight = 86' not in h:
+if 'LC32CoreGraphicsOpBitmapContextGetHeight = 89' not in h:
  anchor='    LC32CoreGraphicsOpContextStrokeEllipseInRect = 85,\n'
  if anchor not in h: raise SystemExit('opcode anchor missing')
- h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpBitmapContextGetHeight = 86,
-    LC32CoreGraphicsOpBitmapContextGetWidth = 87,
-    LC32CoreGraphicsOpColorCreateCopy = 88,
-    LC32CoreGraphicsOpColorCreateCopyWithAlpha = 89,
-    LC32CoreGraphicsOpColorEqualToColor = 90,
-    LC32CoreGraphicsOpColorGetTypeID = 91,
-    LC32CoreGraphicsOpColorSpaceCreateWithName = 92,
-    LC32CoreGraphicsOpColorSpaceGetBaseColorSpace = 93,
-    LC32CoreGraphicsOpColorSpaceGetNumberOfComponents = 94,
-    LC32CoreGraphicsOpImageCreateCopy = 95,
-    LC32CoreGraphicsOpImageGetDataProvider = 96,
-    LC32CoreGraphicsOpImageGetRenderingIntent = 97,
-    LC32CoreGraphicsOpImageGetShouldInterpolate = 98,
-    LC32CoreGraphicsOpContextSetAllowsAntialiasing = 99,
-    LC32CoreGraphicsOpContextSetAlpha = 100,
-    LC32CoreGraphicsOpContextFlush = 101,
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpBitmapContextGetHeight = 89,
+    LC32CoreGraphicsOpBitmapContextGetWidth = 90,
+    LC32CoreGraphicsOpColorCreateCopy = 91,
+    LC32CoreGraphicsOpColorCreateCopyWithAlpha = 92,
+    LC32CoreGraphicsOpColorEqualToColor = 93,
+    LC32CoreGraphicsOpColorGetTypeID = 94,
+    LC32CoreGraphicsOpColorSpaceCreateWithName = 95,
+    LC32CoreGraphicsOpColorSpaceGetBaseColorSpace = 96,
+    LC32CoreGraphicsOpColorSpaceGetNumberOfComponents = 97,
+    LC32CoreGraphicsOpImageCreateCopy = 98,
+    LC32CoreGraphicsOpImageGetDataProvider = 99,
+    LC32CoreGraphicsOpImageGetRenderingIntent = 100,
+    LC32CoreGraphicsOpImageGetShouldInterpolate = 101,
+    LC32CoreGraphicsOpContextSetAllowsAntialiasing = 102,
+    LC32CoreGraphicsOpContextSetAlpha = 103,
+    LC32CoreGraphicsOpContextFlush = 104,
 ''')
  header.write_text(h)
 
