@@ -548,3 +548,81 @@ if 'case LC32CoreGraphicsOpDataConsumerCreateWithCFData:' not in x:
  if anchor not in x:raise SystemExit('sixth switch anchor missing')
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
 print('CoreGraphics: added 13 typed provider/font exports')
+
+
+# seventh typed image layer shading batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpContextBeginPage = 163' not in h:
+ anchor='    LC32CoreGraphicsOpLayerGetContext = 162,\n'
+ if anchor not in h:raise SystemExit('seventh opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpContextBeginPage = 163,
+    LC32CoreGraphicsOpContextDrawLayerAtPoint = 164,
+    LC32CoreGraphicsOpContextDrawLayerInRect = 165,
+    LC32CoreGraphicsOpContextDrawPDFPage = 166,
+    LC32CoreGraphicsOpContextDrawShading = 167,
+    LC32CoreGraphicsOpContextDrawTiledImage = 168,
+    LC32CoreGraphicsOpImageCreateWithMaskingColors = 169,
+    LC32CoreGraphicsOpImageCopyDecode = 170,
+    LC32CoreGraphicsOpImageMaskCreate = 171,
+    LC32CoreGraphicsOpLayerCreateWithContext = 172,
+    LC32CoreGraphicsOpShadingCreateAxial = 173,
+    LC32CoreGraphicsOpShadingCreateRadial = 174,
+''');header.write_text(h)
+
+g=guest.read_text()
+if 'void CGContextBeginPage(CGContextRef' not in g:
+ g += r'''
+void CGContextBeginPage(CGContextRef c,const CGRect *r) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextBeginPage,LC32_CG_HOST(c),LC32_CG_U32(r!=NULL),r?LC32_CG_F32(r->origin.x):0,r?LC32_CG_F32(r->origin.y):0,r?LC32_CG_F32(r->size.width):0,r?LC32_CG_F32(r->size.height):0); }
+void CGContextDrawLayerAtPoint(CGContextRef c,CGPoint p,CGLayerRef l) { if(c&&l)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextDrawLayerAtPoint,LC32_CG_HOST(c),LC32_CG_F32(p.x),LC32_CG_F32(p.y),LC32_CG_HOST(l)); }
+void CGContextDrawLayerInRect(CGContextRef c,CGRect r,CGLayerRef l) { if(c&&l)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextDrawLayerInRect,LC32_CG_HOST(c),LC32_CG_F32(r.origin.x),LC32_CG_F32(r.origin.y),LC32_CG_F32(r.size.width),LC32_CG_F32(r.size.height),LC32_CG_HOST(l)); }
+void CGContextDrawPDFPage(CGContextRef c,CGPDFPageRef p) { if(c&&p)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextDrawPDFPage,LC32_CG_HOST(c),LC32_CG_HOST(p)); }
+void CGContextDrawShading(CGContextRef c,CGShadingRef s) { if(c&&s)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextDrawShading,LC32_CG_HOST(c),LC32_CG_HOST(s)); }
+void CGContextDrawTiledImage(CGContextRef c,CGRect r,CGImageRef i) { if(c&&i)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextDrawTiledImage,LC32_CG_HOST(c),LC32_CG_F32(r.origin.x),LC32_CG_F32(r.origin.y),LC32_CG_F32(r.size.width),LC32_CG_F32(r.size.height),LC32_CG_HOST(i)); }
+CGImageRef CGImageCreateWithMaskingColors(CGImageRef i,const CGFloat *v) { return i&&v?(CGImageRef)LC32_CG_CALL(LC32CoreGraphicsOpImageCreateWithMaskingColors,LC32_CG_HOST(i),LC32_CG_U32((uintptr_t)v)):NULL; }
+const CGFloat *CGImageGetDecode(CGImageRef i) { if(!i)return NULL;CGColorSpaceRef s=CGImageGetColorSpace(i);size_t n=s?CGColorSpaceGetNumberOfComponents(s):1;if(!n||n>1024)return NULL;CGFloat *v=LC32GetAssociatedGuestBuffer((id)i,(uint32_t)(n*2*sizeof(CGFloat)));return v&&LC32_CG_CALL(LC32CoreGraphicsOpImageCopyDecode,LC32_CG_HOST(i),LC32_CG_U32((uintptr_t)v),LC32_CG_U32(n*2))?v:NULL; }
+CGImageRef CGImageMaskCreate(size_t w,size_t h,size_t bpc,size_t bpp,size_t row,CGDataProviderRef p,const CGFloat *decode,bool interpolate) { return p?(CGImageRef)LC32_CG_CALL(LC32CoreGraphicsOpImageMaskCreate,LC32_CG_U32(w),LC32_CG_U32(h),LC32_CG_U32(bpc),LC32_CG_U32(bpp),LC32_CG_U32(row),LC32_CG_HOST(p),LC32_CG_U32((uintptr_t)decode),LC32_CG_U32(interpolate)):NULL; }
+CGLayerRef CGLayerCreateWithContext(CGContextRef c,CGSize s,CFDictionaryRef aux) { return c?(CGLayerRef)LC32_CG_CALL(LC32CoreGraphicsOpLayerCreateWithContext,LC32_CG_HOST(c),LC32_CG_F32(s.width),LC32_CG_F32(s.height),LC32_CG_HOST(aux)):NULL; }
+CGShadingRef CGShadingCreateAxial(CGColorSpaceRef space,CGPoint start,CGPoint end,CGFunctionRef function,bool extendStart,bool extendEnd) { return space&&function?(CGShadingRef)LC32_CG_CALL(LC32CoreGraphicsOpShadingCreateAxial,LC32_CG_HOST(space),LC32_CG_F32(start.x),LC32_CG_F32(start.y),LC32_CG_F32(end.x),LC32_CG_F32(end.y),LC32_CG_HOST(function),LC32_CG_U32(extendStart),LC32_CG_U32(extendEnd)):NULL; }
+CGShadingRef CGShadingCreateRadial(CGColorSpaceRef space,CGPoint start,CGFloat sr,CGPoint end,CGFloat er,CGFunctionRef function,bool extendStart,bool extendEnd) { return space&&function?(CGShadingRef)LC32_CG_CALL(LC32CoreGraphicsOpShadingCreateRadial,LC32_CG_HOST(space),LC32_CG_F32(start.x),LC32_CG_F32(start.y),LC32_CG_F32(sr),LC32_CG_F32(end.x),LC32_CG_F32(end.y),LC32_CG_F32(er),LC32_CG_HOST(function),LC32_CG_U32(extendStart),LC32_CG_U32(extendEnd)):NULL; }
+''';guest.write_text(g)
+
+x=host.read_text()
+if 'case LC32CoreGraphicsOpContextBeginPage:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpContextBeginPage: {
+            if(!RequireCoreGraphicsSlots(call,6))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);u32 present=SlotU32(call,1);if(!c||present>1)return 0;CGRect r=SlotRect(call,2);CGContextBeginPage(c,present?&r:nullptr);return 1;
+        }
+        case LC32CoreGraphicsOpContextDrawLayerAtPoint: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);CGLayerRef l=SlotHostObject<CGLayerRef>(call,3);if(!c||!l)return 0;CGContextDrawLayerAtPoint(c,CGPointMake(SlotCGFloat(call,1),SlotCGFloat(call,2)),l);SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpContextDrawLayerInRect:
+        case LC32CoreGraphicsOpContextDrawTiledImage: {
+            if(!RequireCoreGraphicsSlots(call,6))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;CGRect r=SlotRect(call,1);
+            if(opcode==LC32CoreGraphicsOpContextDrawLayerInRect){CGLayerRef l=SlotHostObject<CGLayerRef>(call,5);if(!l)return 0;CGContextDrawLayerInRect(c,r,l);}else{CGImageRef i=SlotHostObject<CGImageRef>(call,5);if(!i)return 0;CGContextDrawTiledImage(c,r,i);}SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpContextDrawPDFPage:
+        case LC32CoreGraphicsOpContextDrawShading: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            if(opcode==LC32CoreGraphicsOpContextDrawPDFPage){CGPDFPageRef p=SlotHostObject<CGPDFPageRef>(call,1);if(!p)return 0;CGContextDrawPDFPage(c,p);}else{CGShadingRef s=SlotHostObject<CGShadingRef>(call,1);if(!s)return 0;CGContextDrawShading(c,s);}SyncBitmapBacking(c,FindBitmapBacking(c));return 1;
+        }
+        case LC32CoreGraphicsOpImageCreateWithMaskingColors: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGImageRef i=SlotHostObject<CGImageRef>(call,0);if(!i)return 0;CGColorSpaceRef space=CGImageGetColorSpace(i);size_t n=space?CGColorSpaceGetNumberOfComponents(space):0;std::vector<CGFloat> values;const CGFloat *ptr=nullptr;if(!n||!ReadGuestCGFloatArray(SlotU32(call,1),n*2,false,values,ptr))return 0;CGImageRef r=CGImageCreateWithMaskingColors(i,ptr);return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpImageCopyDecode: {
+            if(!RequireCoreGraphicsSlots(call,3))return 0;CGImageRef i=SlotHostObject<CGImageRef>(call,0);size_t n=SlotU32(call,2);const CGFloat *v=i?CGImageGetDecode(i):nullptr;return v&&n&&n<=2048?WriteGuestCoreGraphicsFloats(SlotU32(call,1),v,n):0;
+        }
+        case LC32CoreGraphicsOpImageMaskCreate: {
+            if(!RequireCoreGraphicsSlots(call,8))return 0;CGDataProviderRef p=SlotHostObject<CGDataProviderRef>(call,5);u32 interpolate=SlotU32(call,7);if(!p||interpolate>1)return 0;std::vector<CGFloat> values;const CGFloat *decode=nullptr;if(SlotU32(call,6)&&!ReadGuestCGFloatArray(SlotU32(call,6),2,true,values,decode))return 0;CGImageRef r=CGImageMaskCreate(SlotU32(call,0),SlotU32(call,1),SlotU32(call,2),SlotU32(call,3),SlotU32(call,4),p,decode,interpolate!=0);return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpLayerCreateWithContext: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;CGLayerRef r=CGLayerCreateWithContext(c,CGSizeMake(SlotCGFloat(call,1),SlotCGFloat(call,2)),SlotHostObject<CFDictionaryRef>(call,3));return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpShadingCreateAxial:
+        case LC32CoreGraphicsOpShadingCreateRadial: {
+            const bool radial=opcode==LC32CoreGraphicsOpShadingCreateRadial;if(!RequireCoreGraphicsSlots(call,radial?10:8))return 0;CGColorSpaceRef s=SlotHostObject<CGColorSpaceRef>(call,0);CGFunctionRef f=SlotHostObject<CGFunctionRef>(call,radial?7:5);u32 a=SlotU32(call,radial?8:6),b=SlotU32(call,radial?9:7);if(!s||!f||a>1||b>1)return 0;CGShadingRef r=radial?CGShadingCreateRadial(s,CGPointMake(SlotCGFloat(call,1),SlotCGFloat(call,2)),SlotCGFloat(call,3),CGPointMake(SlotCGFloat(call,4),SlotCGFloat(call,5)),SlotCGFloat(call,6),f,a!=0,b!=0):CGShadingCreateAxial(s,CGPointMake(SlotCGFloat(call,1),SlotCGFloat(call,2)),CGPointMake(SlotCGFloat(call,3),SlotCGFloat(call,4)),f,a!=0,b!=0);return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('seventh switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
+print('CoreGraphics: added 12 typed image/layer/shading exports')
