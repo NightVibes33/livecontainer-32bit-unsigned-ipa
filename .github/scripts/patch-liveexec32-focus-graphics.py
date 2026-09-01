@@ -99,3 +99,96 @@ plist_source = ROOT / "GuestMakefile/FrameworkInfoPlists/CoreMedia.plist"
 (ROOT / "GuestMakefile/FrameworkInfoPlists/CoreVideo.plist").write_text(
     plist_source.read_text().replace("CoreMedia", "CoreVideo"))
 print("patched focus value graphics and installed CoreVideo image")
+
+
+# Exact ABI-local value operations and CF ownership operations required by the
+# corpus. Host-backed opaque objects are Objective-C proxy objects in the guest,
+# so CFRetain/CFRelease preserve the same ownership contract without allowing a
+# native pointer to escape into ARM32 code.
+core_graphics = ROOT / "GuestFrameworks/CoreGraphics/CoreGraphics.m"
+text = core_graphics.read_text()
+local_exports = r"""
+bool CGAffineTransformEqualToTransform(CGAffineTransform left,
+                                       CGAffineTransform right) {
+    return left.a == right.a && left.b == right.b &&
+        left.c == right.c && left.d == right.d &&
+        left.tx == right.tx && left.ty == right.ty;
+}
+
+bool CGSizeEqualToSize(CGSize left, CGSize right) {
+    return left.width == right.width && left.height == right.height;
+}
+
+CGColorSpaceRef CGColorSpaceRetain(CGColorSpaceRef space) {
+    return space ? (CGColorSpaceRef)CFRetain(space) : NULL;
+}
+
+CGFontRef CGFontRetain(CGFontRef font) {
+    return font ? (CGFontRef)CFRetain(font) : NULL;
+}
+void CGFontRelease(CGFontRef font) { if(font) CFRelease(font); }
+
+CGImageRef CGImageRetain(CGImageRef image) {
+    return image ? (CGImageRef)CFRetain(image) : NULL;
+}
+
+CGLayerRef CGLayerRetain(CGLayerRef layer) {
+    return layer ? (CGLayerRef)CFRetain(layer) : NULL;
+}
+void CGLayerRelease(CGLayerRef layer) { if(layer) CFRelease(layer); }
+
+CGPDFContentStreamRef CGPDFContentStreamRetain(CGPDFContentStreamRef stream) {
+    return stream ? (CGPDFContentStreamRef)CFRetain(stream) : NULL;
+}
+void CGPDFContentStreamRelease(CGPDFContentStreamRef stream) {
+    if(stream) CFRelease(stream);
+}
+
+CGPDFDocumentRef CGPDFDocumentRetain(CGPDFDocumentRef document) {
+    return document ? (CGPDFDocumentRef)CFRetain(document) : NULL;
+}
+void CGPDFDocumentRelease(CGPDFDocumentRef document) {
+    if(document) CFRelease(document);
+}
+
+CGPDFPageRef CGPDFPageRetain(CGPDFPageRef page) {
+    return page ? (CGPDFPageRef)CFRetain(page) : NULL;
+}
+void CGPDFPageRelease(CGPDFPageRef page) { if(page) CFRelease(page); }
+
+CGPathRef CGPathRetain(CGPathRef path) {
+    return path ? (CGPathRef)CFRetain(path) : NULL;
+}
+
+void CGDataConsumerRelease(CGDataConsumerRef consumer) {
+    if(consumer) CFRelease(consumer);
+}
+void CGFunctionRelease(CGFunctionRef function) {
+    if(function) CFRelease(function);
+}
+void CGPDFOperatorTableRelease(CGPDFOperatorTableRef table) {
+    if(table) CFRelease(table);
+}
+void CGPDFScannerRelease(CGPDFScannerRef scanner) {
+    if(scanner) CFRelease(scanner);
+}
+void CGShadingRelease(CGShadingRef shading) {
+    if(shading) CFRelease(shading);
+}
+"""
+for declaration in [
+    "bool CGAffineTransformEqualToTransform(", "bool CGSizeEqualToSize(",
+    "CGColorSpaceRef CGColorSpaceRetain(", "CGFontRef CGFontRetain(",
+    "void CGFontRelease(", "CGImageRef CGImageRetain(",
+    "CGLayerRef CGLayerRetain(", "void CGLayerRelease(",
+    "CGPDFContentStreamRef CGPDFContentStreamRetain(",
+    "void CGPDFContentStreamRelease(", "CGPDFDocumentRef CGPDFDocumentRetain(",
+    "void CGPDFDocumentRelease(", "CGPDFPageRef CGPDFPageRetain(",
+    "void CGPDFPageRelease(", "CGPathRef CGPathRetain(",
+    "void CGDataConsumerRelease(", "void CGFunctionRelease(",
+    "void CGPDFOperatorTableRelease(", "void CGPDFScannerRelease(",
+    "void CGShadingRelease(",
+]:
+    if declaration in text:
+        raise SystemExit(f"local corpus export already exists: {declaration}")
+core_graphics.write_text(text + local_exports)
