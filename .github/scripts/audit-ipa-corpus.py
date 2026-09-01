@@ -40,12 +40,18 @@ def describe_macho(path, relative_name):
             item["weak"]=bool(sym.binding_info.weak_import)
             item["address"]=int(sym.binding_info.address)
         imported.append(item)
+    commands=[{"name":x.name,"command":str(x.command)} for x in binary.libraries]
+    install_names=[x["name"] for x in commands if "ID_DYLIB" in x["command"]]
+    # Mach binding ordinals count dependency load commands, never LC_ID_DYLIB.
+    # LIEF exposes both through binary.libraries, so retaining the ID here
+    # would shift every embedded-dylib import by one framework.
+    libraries=[x for x in commands if "ID_DYLIB" not in x["command"]]
     return {
       "path":relative_name,"cpu_type":str(binary.header.cpu_type),
       "file_type":str(binary.header.file_type),"pie":bool(binary.is_pie),
       "encrypted":bool(binary.has_encryption_info and binary.encryption_info.crypt_id),
-      "libraries":[{"name":x.name,"command":str(x.command)} for x in binary.libraries],
-      "imports":imported,
+      "install_name":install_names[0] if install_names else None,
+      "libraries":libraries,"imports":imported,
     }
 
 def detect_markers(blob):
