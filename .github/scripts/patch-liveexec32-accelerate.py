@@ -316,5 +316,212 @@ void vDSP_fft_zripD(FFTSetupD setup, const DSPDoubleSplitComplex *data,
     free(imaginary);
 }
 
+
+static int LC32VImageBufferValidARGB8888(const vImage_Buffer *buffer) {
+    return buffer && buffer->data && buffer->width <= SIZE_MAX / 4 &&
+        buffer->rowBytes >= buffer->width * 4 &&
+        (!buffer->height || buffer->rowBytes <= SIZE_MAX / buffer->height);
+}
+
+vImage_Error vImageBuffer_Init(vImage_Buffer *buffer,
+                               vImagePixelCount height,
+                               vImagePixelCount width,
+                               uint32_t pixelBits,
+                               vImage_Flags flags) {
+    const vImage_Flags allowed = kvImageNoAllocate |
+        kvImagePrintDiagnosticsToConsole;
+    if(!buffer) return kvImageNullPointerArgument;
+    memset(buffer, 0, sizeof(*buffer));
+    if(flags & ~allowed) return kvImageUnknownFlagsBit;
+    if(!pixelBits || width > (SIZE_MAX - 7) / pixelBits)
+        return kvImageInvalidParameter;
+    const size_t rowBytesUnaligned = ((size_t)width * pixelBits + 7) / 8;
+    const size_t alignment = 64;
+    if(rowBytesUnaligned > SIZE_MAX - (alignment - 1))
+        return kvImageInvalidParameter;
+    const size_t rowBytes = (rowBytesUnaligned + alignment - 1) &
+        ~(alignment - 1);
+    if(height && rowBytes > SIZE_MAX / (size_t)height)
+        return kvImageInvalidParameter;
+    buffer->height = height;
+    buffer->width = width;
+    buffer->rowBytes = rowBytes;
+    if(flags & kvImageNoAllocate) return (vImage_Error)alignment;
+    const size_t bytes = rowBytes * (size_t)height;
+    void *data = NULL;
+    if(bytes && posix_memalign(&data, alignment, bytes) != 0)
+        return kvImageMemoryAllocationError;
+    buffer->data = data;
+    return kvImageNoError;
+}
+
+vImage_Error vImageHistogramCalculation_ARGB8888(
+        const vImage_Buffer *source, vImagePixelCount *histogram[4],
+        vImage_Flags flags) {
+    const vImage_Flags allowed = kvImageLeaveAlphaUnchanged | kvImageDoNotTile;
+    if(!LC32VImageBufferValidARGB8888(source) || !histogram)
+        return kvImageNullPointerArgument;
+    if(flags & ~allowed) return kvImageUnknownFlagsBit;
+    const size_t firstChannel = (flags & kvImageLeaveAlphaUnchanged) ? 1 : 0;
+    for(size_t channel = firstChannel; channel < 4; ++channel) {
+        if(!histogram[channel]) return kvImageNullPointerArgument;
+        memset(histogram[channel], 0, 256 * sizeof(*histogram[channel]));
+    }
+    for(size_t row = 0; row < source->height; ++row) {
+        const uint8_t *pixel = (const uint8_t *)source->data +
+            row * source->rowBytes;
+        for(size_t column = 0; column < source->width; ++column, pixel += 4)
+            for(size_t channel = firstChannel; channel < 4; ++channel)
+                ++histogram[channel][pixel[channel]];
+    }
+    return kvImageNoError;
+}
+
+static uint8_t LC32VImageClampToByte(int64_t value) {
+    return value < 0 ? 0 : value > 255 ? 255 : (uint8_t)value;
+}
+
+vImage_Error vImageMatrixMultiply_ARGB8888(
+        const vImage_Buffer *source, const vImage_Buffer *destination,
+        const int16_t matrix[16], int32_t divisor,
+        const int16_t *preBias, const int32_t *postBias,
+        vImage_Flags flags) {
+    const vImage_Flags allowed = kvImageLeaveAlphaUnchanged | kvImageDoNotTile;
+    if(!LC32VImageBufferValidARGB8888(source) ||
+       !LC32VImageBufferValidARGB8888(destination) || !matrix)
+        return kvImageNullPointerArgument;
+    if(flags & ~allowed) return kvImageUnknownFlagsBit;
+    if(destination->width > source->width ||
+       destination->height > source->height)
+        return kvImageRoiLargerThanInputBuffer;
+    if(!divisor) divisor = 1;
+    for(size_t row = 0; row < destination->height; ++row) {
+        const uint8_t *input = (const uint8_t *)source->data +
+            row * source->rowBytes;
+        uint8_t *output = (uint8_t *)destination->data +
+            row * destination->rowBytes;
+        for(size_t column = 0; column < destination->width;
+            ++column, input += 4, output += 4) {
+            uint8_t original[4];
+            memcpy(original, input, sizeof(original));
+            for(size_t result = 0; result < 4; ++result) {
+                if(result == 0 && (flags & kvImageLeaveAlphaUnchanged)) {
+                    output[result] = original[result];
+                    continue;
+                }
+                int64_t accumulator = postBias ? postBias[result] : 0;
+                for(size_t component = 0; component < 4; ++component) {
+                    const int64_t biased = (int64_t)original[component] +
+                        (preBias ? preBias[component] : 0);
+                    accumulator += biased * matrix[component * 4 + result];
+                }
+                output[result] = LC32VImageClampToByte(accumulator / divisor);
+            }
+        }
+    }
+    return kvImageNoError;
+}
+
+vImage_Error vImageBoxConvolve_ARGB8888(
+        const vImage_Buffer *source, const vImage_Buffer *destination,
+        void *temporaryBuffer, vImagePixelCount sourceOffsetX,
+        vImagePixelCount sourceOffsetY, uint32_t kernelHeight,
+        uint32_t kernelWidth, const Pixel_8888 backgroundColor,
+        vImage_Flags flags) {
+    (void)temporaryBuffer;
+    const vImage_Flags edgeMask = kvImageCopyInPlace |
+        kvImageBackgroundColorFill | kvImageEdgeExtend |
+        kvImageTruncateKernel;
+    const vImage_Flags allowed = edgeMask | kvImageLeaveAlphaUnchanged |
+        kvImageDoNotTile | kvImageGetTempBufferSize;
+    if(!LC32VImageBufferValidARGB8888(source) ||
+       !LC32VImageBufferValidARGB8888(destination))
+        return kvImageNullPointerArgument;
+    if(flags & ~allowed) return kvImageUnknownFlagsBit;
+    const vImage_Flags edge = flags & edgeMask;
+    if(!edge || (edge & (edge - 1))) return kvImageInvalidEdgeStyle;
+    if(!kernelHeight || !kernelWidth || !(kernelHeight & 1) ||
+       !(kernelWidth & 1)) return kvImageInvalidKernelSize;
+    if(sourceOffsetX > source->width ||
+       destination->width > source->width - sourceOffsetX)
+        return kvImageInvalidOffset_X;
+    if(sourceOffsetY > source->height ||
+       destination->height > source->height - sourceOffsetY)
+        return kvImageInvalidOffset_Y;
+    if(edge == kvImageBackgroundColorFill && !backgroundColor)
+        return kvImageNullPointerArgument;
+    if(flags & kvImageGetTempBufferSize) return 0;
+    if(destination->height && destination->rowBytes >
+       SIZE_MAX / destination->height) return kvImageInvalidParameter;
+    const size_t outputBytes = destination->rowBytes * destination->height;
+    uint8_t *result = malloc(outputBytes ? outputBytes : 1);
+    if(!result) return kvImageMemoryAllocationError;
+    if(outputBytes) memcpy(result, destination->data, outputBytes);
+    const int64_t radiusY = kernelHeight / 2;
+    const int64_t radiusX = kernelWidth / 2;
+    for(size_t row = 0; row < destination->height; ++row) {
+        uint8_t *output = result + row * destination->rowBytes;
+        const int64_t centerY = (int64_t)sourceOffsetY + row;
+        for(size_t column = 0; column < destination->width;
+            ++column, output += 4) {
+            const int64_t centerX = (int64_t)sourceOffsetX + column;
+            uint64_t sums[4] = {0, 0, 0, 0};
+            size_t samples = 0;
+            int missing = 0;
+            for(int64_t ky = -radiusY; ky <= radiusY; ++ky) {
+                for(int64_t kx = -radiusX; kx <= radiusX; ++kx) {
+                    int64_t y = centerY + ky;
+                    int64_t x = centerX + kx;
+                    const uint8_t *pixel = NULL;
+                    if(x >= 0 && y >= 0 && x < (int64_t)source->width &&
+                       y < (int64_t)source->height) {
+                        pixel = (const uint8_t *)source->data +
+                            (size_t)y * source->rowBytes + (size_t)x * 4;
+                    } else if(edge == kvImageEdgeExtend) {
+                        if(x < 0) x = 0;
+                        else if(x >= (int64_t)source->width)
+                            x = (int64_t)source->width - 1;
+                        if(y < 0) y = 0;
+                        else if(y >= (int64_t)source->height)
+                            y = (int64_t)source->height - 1;
+                        pixel = (const uint8_t *)source->data +
+                            (size_t)y * source->rowBytes + (size_t)x * 4;
+                    } else if(edge == kvImageBackgroundColorFill) {
+                        pixel = backgroundColor;
+                    } else if(edge == kvImageCopyInPlace) {
+                        missing = 1;
+                        continue;
+                    } else {
+                        continue;
+                    }
+                    ++samples;
+                    for(size_t channel = 0; channel < 4; ++channel)
+                        sums[channel] += pixel[channel];
+                }
+            }
+            const uint8_t *center = (const uint8_t *)source->data +
+                (size_t)centerY * source->rowBytes + (size_t)centerX * 4;
+            if(missing && edge == kvImageCopyInPlace) {
+                memcpy(output, center, 4);
+                continue;
+            }
+            if(!samples) {
+                free(result);
+                return kvImageInvalidParameter;
+            }
+            for(size_t channel = 0; channel < 4; ++channel) {
+                if(channel == 0 && (flags & kvImageLeaveAlphaUnchanged))
+                    output[channel] = center[channel];
+                else
+                    output[channel] = (uint8_t)((sums[channel] + samples / 2) /
+                        samples);
+            }
+        }
+    }
+    if(outputBytes) memcpy(destination->data, result, outputBytes);
+    free(result);
+    return kvImageNoError;
+}
+
 ''')
-print("Accelerate: implemented guest-memory vDSP and packed-real FFT routines")
+print("Accelerate: implemented guest-memory vDSP, FFT, and ARGB8888 vImage routines")

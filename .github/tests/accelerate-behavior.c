@@ -122,10 +122,79 @@ static void test_vector_routines(void) {
     require_close(output[4], -6, 0, "vsmul", 2);
 }
 
+static void test_vimage_buffer_and_histogram(void) {
+    vImage_Buffer allocated = {0};
+    vImage_Error alignment = vImageBuffer_Init(&allocated, 3, 5, 32,
+        kvImageNoAllocate);
+    if(alignment <= 0 || allocated.data || allocated.height != 3 ||
+       allocated.width != 5 || allocated.rowBytes < 20 ||
+       allocated.rowBytes % (size_t)alignment) exit(10);
+    if(vImageBuffer_Init(&allocated, 3, 5, 32, kvImageNoFlags) !=
+       kvImageNoError || !allocated.data) exit(11);
+    free(allocated.data);
+
+    const unsigned char pixels[] = {
+        1, 2, 3, 4,    1, 2, 9, 4,
+        5, 2, 3, 8,    1, 7, 3, 4,
+    };
+    vImage_Buffer source = {(void *)pixels, 2, 2, 8};
+    vImagePixelCount bins[4][256];
+    vImagePixelCount *histograms[] = {bins[0], bins[1], bins[2], bins[3]};
+    if(vImageHistogramCalculation_ARGB8888(&source, histograms,
+        kvImageNoFlags) != kvImageNoError) exit(12);
+    if(bins[0][1] != 3 || bins[0][5] != 1 || bins[1][2] != 3 ||
+       bins[1][7] != 1 || bins[2][3] != 3 || bins[2][9] != 1 ||
+       bins[3][4] != 3 || bins[3][8] != 1) exit(13);
+}
+
+static void test_vimage_matrix(void) {
+    const unsigned char input[] = {10, 20, 30, 40, 50, 60, 70, 80};
+    unsigned char output[sizeof(input)] = {0};
+    vImage_Buffer source = {(void *)input, 1, 2, sizeof(input)};
+    vImage_Buffer destination = {output, 1, 2, sizeof(output)};
+    const int16_t matrix[] = {
+        0, 0, 0, 1,
+        0, 0, 1, 0,
+        0, 1, 0, 0,
+        1, 0, 0, 0,
+    };
+    if(vImageMatrixMultiply_ARGB8888(&source, &destination, matrix, 1,
+        NULL, NULL, kvImageNoFlags) != kvImageNoError) exit(14);
+    const unsigned char expected[] = {40, 30, 20, 10, 80, 70, 60, 50};
+    for(size_t index = 0; index < sizeof(expected); ++index)
+        if(output[index] != expected[index]) exit(15);
+}
+
+static void test_vimage_box(void) {
+    unsigned char input[3 * 3 * 4];
+    unsigned char output[sizeof(input)];
+    for(size_t pixel = 0; pixel < 9; ++pixel)
+        for(size_t channel = 0; channel < 4; ++channel)
+            input[pixel * 4 + channel] = (unsigned char)(pixel * 10 + channel);
+    vImage_Buffer source = {input, 3, 3, 12};
+    vImage_Buffer destination = {output, 3, 3, 12};
+    if(vImageBoxConvolve_ARGB8888(&source, &destination, NULL, 0, 0,
+        3, 3, NULL, kvImageEdgeExtend) != kvImageNoError) exit(16);
+    /* Center is the average of pixels 0...8; corner uses replicated edges. */
+    for(size_t channel = 0; channel < 4; ++channel) {
+        if(output[(1 * 3 + 1) * 4 + channel] != 40 + channel) exit(17);
+        if(output[channel] != 13 + channel) exit(18);
+    }
+    Pixel_8888 background = {100, 101, 102, 103};
+    if(vImageBoxConvolve_ARGB8888(&source, &destination, NULL, 0, 0,
+        3, 3, background, kvImageBackgroundColorFill) != kvImageNoError)
+        exit(19);
+    for(size_t channel = 0; channel < 4; ++channel)
+        if(output[channel] != 64 + channel) exit(20);
+}
+
 int main(void) {
     test_float_fft();
     test_double_fft();
     test_vector_routines();
+    test_vimage_buffer_and_histogram();
+    test_vimage_matrix();
+    test_vimage_box();
     puts("Accelerate compatibility behavior passed");
     return 0;
 }
