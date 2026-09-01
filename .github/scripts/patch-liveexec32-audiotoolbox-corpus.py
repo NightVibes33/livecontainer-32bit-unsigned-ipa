@@ -77,3 +77,99 @@ if 'case LC32AudioToolboxOpAudioFormatGetProperty:' not in x:
  x=x.replace(a,cases+a,1)
 X.write_text(x)
 print('AudioToolbox: added parameters, format properties, and ExtAudioFile creation')
+
+
+# ExtAudioFile write bridge with persistent storage for asynchronous writes.
+h=H.read_text();a='    LC32AudioToolboxOpExtAudioFileWrapAudioFileID = 48,\n'
+if 'LC32AudioToolboxOpExtAudioFileWrite = 49' not in h:
+ if a not in h:raise SystemExit('ExtAudio write opcode anchor missing')
+ h=h.replace(a,a+r'''    LC32AudioToolboxOpExtAudioFileWrite = 49,
+    LC32AudioToolboxOpExtAudioFileWriteAsync = 50,
+''');H.write_text(h)
+g=G.read_text()
+if 'OSStatus ExtAudioFileWrite(' not in g:
+ g+=r'''
+OSStatus ExtAudioFileWrite(ExtAudioFileRef file,UInt32 frames,const AudioBufferList *data){if(!file||!data)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpExtAudioFileWrite,LC32_AUDIO_U32((uintptr_t)file),LC32_AUDIO_U32(frames),LC32_AUDIO_U32((uintptr_t)data));}
+OSStatus ExtAudioFileWriteAsync(ExtAudioFileRef file,UInt32 frames,const AudioBufferList *data){if(!file||!data)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpExtAudioFileWriteAsync,LC32_AUDIO_U32((uintptr_t)file),LC32_AUDIO_U32(frames),LC32_AUDIO_U32((uintptr_t)data));}
+''';G.write_text(g)
+x=X.read_text()
+old='struct ExtAudioFileEntry {\n    ExtAudioFileRef file = nullptr;\n    std::mutex mutex;\n};'
+if 'asyncWriteBuffers' not in x:
+ if old not in x:raise SystemExit('ExtAudio entry anchor missing')
+ x=x.replace(old,'struct ExtAudioFileEntry {\n    ExtAudioFileRef file = nullptr;\n    std::unique_ptr<uint8_t[]> asyncWriteList;\n    std::vector<std::vector<uint8_t>> asyncWriteBuffers;\n    std::mutex mutex;\n};',1)
+if 'OSStatus DispatchCorpusExtAudioFileWrite' not in x:
+ helper=r'''
+bool ReadCorpusGuestAudioBufferList(u32 address,std::unique_ptr<uint8_t[]> &listStorage,std::vector<std::vector<uint8_t>> &buffers){u32 count=0;if(!address||!ReadGuestU32(address,count)||!count||count>kMaximumAudioBuffers)return false;size_t guestBytes=static_cast<size_t>(count)*sizeof(GuestAudioBuffer);uint64_t entries=static_cast<uint64_t>(address)+sizeof(u32);if(entries+guestBytes>static_cast<uint64_t>(UINT32_MAX)+1)return false;std::vector<GuestAudioBuffer> guest(count);if(Dynarmic_mem_1read(static_cast<u32>(entries),guestBytes,reinterpret_cast<char *>(guest.data()))!=0)return false;size_t listBytes=offsetof(AudioBufferList,mBuffers)+static_cast<size_t>(count)*sizeof(AudioBuffer);listStorage=std::make_unique<uint8_t[]>(listBytes);memset(listStorage.get(),0,listBytes);AudioBufferList *list=reinterpret_cast<AudioBufferList *>(listStorage.get());list->mNumberBuffers=count;buffers.clear();buffers.resize(count);size_t total=0;for(u32 i=0;i<count;i++){if(guest[i].byteSize>kMaximumAudioBytes-total||(guest[i].byteSize&&(!guest[i].data||static_cast<uint64_t>(guest[i].data)+guest[i].byteSize>static_cast<uint64_t>(UINT32_MAX)+1)))return false;total+=guest[i].byteSize;buffers[i].resize(guest[i].byteSize);if(guest[i].byteSize&&Dynarmic_mem_1read(guest[i].data,guest[i].byteSize,reinterpret_cast<char *>(buffers[i].data()))!=0)return false;list->mBuffers[i].mNumberChannels=guest[i].channels;list->mBuffers[i].mDataByteSize=guest[i].byteSize;list->mBuffers[i].mData=guest[i].byteSize?buffers[i].data():nullptr;}return true;}
+OSStatus DispatchCorpusExtAudioFileWrite(const LC32AudioToolboxCall &call,bool asynchronous){if(!RequireSlots(call,3))return kAudio_ParamError;auto entry=FindExtAudioFile(SlotU32(call,0));if(!entry)return kAudio_ParamError;std::unique_ptr<uint8_t[]> list;std::vector<std::vector<uint8_t>> buffers;if(!ReadCorpusGuestAudioBufferList(SlotU32(call,2),list,buffers))return kAudio_ParamError;std::lock_guard<std::mutex> lock(entry->mutex);if(!entry->file)return kAudio_ParamError;if(asynchronous){entry->asyncWriteList=std::move(list);entry->asyncWriteBuffers=std::move(buffers);return ExtAudioFileWriteAsync(entry->file,SlotU32(call,1),reinterpret_cast<AudioBufferList *>(entry->asyncWriteList.get()));}return ExtAudioFileWrite(entry->file,SlotU32(call,1),reinterpret_cast<AudioBufferList *>(list.get()));}
+
+'''
+ a='} // namespace\n\nextern "C" u32 LC32_AudioToolbox_Dispatch'
+ if a not in x:raise SystemExit('ExtAudio write helper anchor missing')
+ x=x.replace(a,helper+a,1)
+if 'case LC32AudioToolboxOpExtAudioFileWrite:' not in x:
+ cases=r'''
+        case LC32AudioToolboxOpExtAudioFileWrite:return static_cast<u32>(DispatchCorpusExtAudioFileWrite(call,false));
+        case LC32AudioToolboxOpExtAudioFileWriteAsync:return static_cast<u32>(DispatchCorpusExtAudioFileWrite(call,true));
+'''
+ a='        case LC32AudioToolboxOpRemoteIOOutputStart:'
+ if a not in x:raise SystemExit('ExtAudio write switch anchor missing')
+ x=x.replace(a,cases+a,1)
+X.write_text(x)
+print('AudioToolbox: added safe synchronous and persistent asynchronous ExtAudioFile writes')
+
+
+# AudioFileStream lifecycle and synchronous guest callback bridge.
+h=H.read_text();a='    LC32AudioToolboxOpExtAudioFileWriteAsync = 50,\n'
+if 'LC32AudioToolboxOpAudioFileStreamOpen = 51' not in h:
+ if a not in h:raise SystemExit('stream opcode anchor missing')
+ h=h.replace(a,a+r'''    LC32AudioToolboxOpAudioFileStreamOpen = 51,
+    LC32AudioToolboxOpAudioFileStreamClose = 52,
+    LC32AudioToolboxOpAudioFileStreamGetProperty = 53,
+    LC32AudioToolboxOpAudioFileStreamGetPropertyInfo = 54,
+    LC32AudioToolboxOpAudioFileStreamParseBytes = 55,
+    LC32AudioToolboxOpAudioFileStreamSeek = 56,
+''');H.write_text(h)
+g=G.read_text()
+if 'OSStatus AudioFileStreamOpen(' not in g:
+ g+=r'''
+OSStatus AudioFileStreamOpen(void *client,AudioFileStream_PropertyListenerProc propertyProc,AudioFileStream_PacketsProc packetsProc,AudioFileTypeID hint,AudioFileStreamID *out){if(!propertyProc||!packetsProc||!out)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamOpen,LC32_AUDIO_U32((uintptr_t)client),LC32_AUDIO_U32((uintptr_t)propertyProc),LC32_AUDIO_U32((uintptr_t)packetsProc),LC32_AUDIO_U32(hint),LC32_AUDIO_U32((uintptr_t)out));}
+OSStatus AudioFileStreamClose(AudioFileStreamID stream){return stream?(OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamClose,LC32_AUDIO_U32((uintptr_t)stream)):kAudio_ParamError;}
+OSStatus AudioFileStreamGetProperty(AudioFileStreamID stream,AudioFileStreamPropertyID property,UInt32 *ioSize,void *out){if(!stream||!ioSize)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamGetProperty,LC32_AUDIO_U32((uintptr_t)stream),LC32_AUDIO_U32(property),LC32_AUDIO_U32((uintptr_t)ioSize),LC32_AUDIO_U32((uintptr_t)out));}
+OSStatus AudioFileStreamGetPropertyInfo(AudioFileStreamID stream,AudioFileStreamPropertyID property,UInt32 *outSize,Boolean *outWritable){if(!stream||!outSize)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamGetPropertyInfo,LC32_AUDIO_U32((uintptr_t)stream),LC32_AUDIO_U32(property),LC32_AUDIO_U32((uintptr_t)outSize),LC32_AUDIO_U32((uintptr_t)outWritable));}
+OSStatus AudioFileStreamParseBytes(AudioFileStreamID stream,UInt32 count,const void *data,AudioFileStreamParseFlags flags){if(!stream||(count&&!data))return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamParseBytes,LC32_AUDIO_U32((uintptr_t)stream),LC32_AUDIO_U32(count),LC32_AUDIO_U32((uintptr_t)data),LC32_AUDIO_U32(flags));}
+OSStatus AudioFileStreamSeek(AudioFileStreamID stream,SInt64 packet,SInt64 *outOffset,AudioFileStreamSeekFlags *ioFlags){if(!stream||!outOffset||!ioFlags)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFileStreamSeek,LC32_AUDIO_U32((uintptr_t)stream),(uint64_t)packet,LC32_AUDIO_U32((uintptr_t)outOffset),LC32_AUDIO_U32((uintptr_t)ioFlags));}
+''';G.write_text(g)
+x=X.read_text()
+if 'struct CorpusAudioFileStreamEntry' not in x:
+ helper=r'''
+struct CorpusAudioFileStreamEntry{AudioFileStreamID stream=nullptr;u32 token=0,client=0,propertyProc=0,packetsProc=0,currentGuestData=0;const uint8_t *currentHostData=nullptr;u32 currentBytes=0;std::mutex mutex;};
+std::mutex corpusAudioFileStreamsMutex;std::unordered_map<u32,std::shared_ptr<CorpusAudioFileStreamEntry>> corpusAudioFileStreams;std::atomic<u32> nextCorpusAudioFileStreamToken{1};
+std::shared_ptr<CorpusAudioFileStreamEntry> FindCorpusAudioFileStream(u32 token){std::lock_guard<std::mutex> l(corpusAudioFileStreamsMutex);auto i=corpusAudioFileStreams.find(token);return i==corpusAudioFileStreams.end()?nullptr:i->second;}
+u32 InsertCorpusAudioFileStream(const std::shared_ptr<CorpusAudioFileStreamEntry>& e){std::lock_guard<std::mutex> l(corpusAudioFileStreamsMutex);for(size_t n=0;n<UINT32_MAX;n++){u32 token=nextCorpusAudioFileStreamToken.fetch_add(1,std::memory_order_relaxed);if(token&&corpusAudioFileStreams.emplace(token,e).second){e->token=token;return token;}}return 0;}
+std::shared_ptr<CorpusAudioFileStreamEntry> TakeCorpusAudioFileStream(u32 token){std::lock_guard<std::mutex> l(corpusAudioFileStreamsMutex);auto i=corpusAudioFileStreams.find(token);if(i==corpusAudioFileStreams.end())return {};auto e=i->second;corpusAudioFileStreams.erase(i);return e;}
+u32 AllocateCorpusGuestBytes(size_t size){return size&&size<=UINT32_MAX?AllocateGuestAudioFileCallbackBytes(static_cast<u32>(size)):0;}
+void CorpusAudioFileStreamPropertyCallback(void *raw,AudioFileStreamID,AudioFileStreamPropertyID property,AudioFileStreamPropertyFlags *flags){auto *e=static_cast<CorpusAudioFileStreamEntry *>(raw);if(!e||!e->propertyProc||!Dynarmic_guest_thread_is_registered())return;u32 guestFlags=AllocateCorpusGuestBytes(sizeof(u32));if(!guestFlags)return;u32 value=flags?*flags:0;WriteGuestU32(guestFlags,value);u32 args[]={e->client,e->token,property,guestFlags};InvokeGuestAudioQueueFunction(e->propertyProc,args,4);if(flags&&ReadGuestU32(guestFlags,value))*flags=value;guest_free(guestFlags);}
+void CorpusAudioFileStreamPacketsCallback(void *raw,UInt32 bytes,UInt32 packets,const void *input,AudioStreamPacketDescription *descriptions){auto *e=static_cast<CorpusAudioFileStreamEntry *>(raw);if(!e||!e->packetsProc||!Dynarmic_guest_thread_is_registered())return;u32 guestData=0;if(input&&e->currentHostData){ptrdiff_t offset=static_cast<const uint8_t *>(input)-e->currentHostData;if(offset>=0&&static_cast<uint64_t>(offset)+bytes<=e->currentBytes)guestData=e->currentGuestData+static_cast<u32>(offset);}u32 guestDescriptions=0;if(descriptions&&packets){size_t size=static_cast<size_t>(packets)*sizeof(AudioStreamPacketDescription);if(size<=kMaximumPropertyBytes){guestDescriptions=AllocateCorpusGuestBytes(size);if(guestDescriptions)Dynarmic_mem_1write(guestDescriptions,size,reinterpret_cast<char *>(descriptions));}}u32 args[]={e->client,e->token,bytes,packets,guestData,guestDescriptions};InvokeGuestAudioQueueFunction(e->packetsProc,args,6);if(guestDescriptions)guest_free(guestDescriptions);}
+OSStatus DispatchCorpusAudioFileStreamOpen(const LC32AudioToolboxCall &call){if(!RequireSlots(call,5)||!SlotU32(call,1)||!SlotU32(call,2)||!SlotU32(call,4))return kAudio_ParamError;auto e=std::make_shared<CorpusAudioFileStreamEntry>();e->client=SlotU32(call,0);e->propertyProc=SlotU32(call,1);e->packetsProc=SlotU32(call,2);OSStatus status=AudioFileStreamOpen(e.get(),CorpusAudioFileStreamPropertyCallback,CorpusAudioFileStreamPacketsCallback,SlotU32(call,3),&e->stream);if(status!=noErr)return status;u32 token=InsertCorpusAudioFileStream(e);if(!token||!WriteGuestU32(SlotU32(call,4),token)){if(token)TakeCorpusAudioFileStream(token);AudioFileStreamClose(e->stream);return kAudio_ParamError;}return noErr;}
+OSStatus DispatchCorpusAudioFileStreamProperty(const LC32AudioToolboxCall &call,bool info){if(!RequireSlots(call,4))return kAudio_ParamError;auto e=FindCorpusAudioFileStream(SlotU32(call,0));if(!e)return kAudio_ParamError;std::lock_guard<std::mutex> lock(e->mutex);if(info){UInt32 size=0;Boolean writable=false;OSStatus status=AudioFileStreamGetPropertyInfo(e->stream,SlotU32(call,1),&size,&writable);if(!WriteGuestU32(SlotU32(call,2),size)||(SlotU32(call,3)&&Dynarmic_mem_1write(SlotU32(call,3),1,reinterpret_cast<char *>(&writable))!=0))return kAudio_ParamError;return status;}u32 requested=0;if(!ReadGuestU32(SlotU32(call,2),requested)||requested>kMaximumPropertyBytes||(requested&&!SlotU32(call,3)))return kAudio_ParamError;std::vector<uint8_t> out(requested?requested:1);UInt32 returned=requested;OSStatus status=AudioFileStreamGetProperty(e->stream,SlotU32(call,1),&returned,requested?out.data():nullptr);if(!WriteGuestU32(SlotU32(call,2),returned))return kAudio_ParamError;if(status==noErr&&returned&&(returned>requested||Dynarmic_mem_1write(SlotU32(call,3),returned,reinterpret_cast<char *>(out.data()))!=0))return kAudio_ParamError;return status;}
+OSStatus DispatchCorpusAudioFileStreamParse(const LC32AudioToolboxCall &call){if(!RequireSlots(call,4))return kAudio_ParamError;auto e=FindCorpusAudioFileStream(SlotU32(call,0));u32 count=SlotU32(call,1);if(!e||count>kMaximumAudioBytes||(count&&!SlotU32(call,2)))return kAudio_ParamError;std::vector<uint8_t> bytes(count);if(count&&Dynarmic_mem_1read(SlotU32(call,2),count,reinterpret_cast<char *>(bytes.data()))!=0)return kAudio_ParamError;std::lock_guard<std::mutex> lock(e->mutex);e->currentGuestData=SlotU32(call,2);e->currentHostData=bytes.data();e->currentBytes=count;OSStatus status=AudioFileStreamParseBytes(e->stream,count,count?bytes.data():nullptr,SlotU32(call,3));e->currentGuestData=0;e->currentHostData=nullptr;e->currentBytes=0;return status;}
+OSStatus DispatchCorpusAudioFileStreamSeek(const LC32AudioToolboxCall &call){if(!RequireSlots(call,4))return kAudio_ParamError;auto e=FindCorpusAudioFileStream(SlotU32(call,0));u32 flags=0;if(!e||!ReadGuestU32(SlotU32(call,3),flags))return kAudio_ParamError;SInt64 offset=0;std::lock_guard<std::mutex> lock(e->mutex);OSStatus status=AudioFileStreamSeek(e->stream,static_cast<SInt64>(call.slots[1]),&offset,reinterpret_cast<AudioFileStreamSeekFlags *>(&flags));if(Dynarmic_mem_1write(SlotU32(call,2),sizeof(offset),reinterpret_cast<char *>(&offset))!=0||!WriteGuestU32(SlotU32(call,3),flags))return kAudio_ParamError;return status;}
+
+'''
+ a='} // namespace\n\nextern "C" u32 LC32_AudioToolbox_Dispatch'
+ if a not in x:raise SystemExit('stream helper anchor missing')
+ x=x.replace(a,helper+a,1)
+if 'case LC32AudioToolboxOpAudioFileStreamOpen:' not in x:
+ cases=r'''
+        case LC32AudioToolboxOpAudioFileStreamOpen:return static_cast<u32>(DispatchCorpusAudioFileStreamOpen(call));
+        case LC32AudioToolboxOpAudioFileStreamClose:{if(!RequireSlots(call,1))return static_cast<u32>(kAudio_ParamError);auto e=TakeCorpusAudioFileStream(SlotU32(call,0));if(!e)return static_cast<u32>(kAudio_ParamError);std::lock_guard<std::mutex> lock(e->mutex);return static_cast<u32>(AudioFileStreamClose(e->stream));}
+        case LC32AudioToolboxOpAudioFileStreamGetProperty:return static_cast<u32>(DispatchCorpusAudioFileStreamProperty(call,false));
+        case LC32AudioToolboxOpAudioFileStreamGetPropertyInfo:return static_cast<u32>(DispatchCorpusAudioFileStreamProperty(call,true));
+        case LC32AudioToolboxOpAudioFileStreamParseBytes:return static_cast<u32>(DispatchCorpusAudioFileStreamParse(call));
+        case LC32AudioToolboxOpAudioFileStreamSeek:return static_cast<u32>(DispatchCorpusAudioFileStreamSeek(call));
+'''
+ a='        case LC32AudioToolboxOpRemoteIOOutputStart:'
+ if a not in x:raise SystemExit('stream switch anchor missing')
+ x=x.replace(a,cases+a,1)
+X.write_text(x)
+print('AudioToolbox: added tokenized AudioFileStream lifecycle and guest callbacks')
