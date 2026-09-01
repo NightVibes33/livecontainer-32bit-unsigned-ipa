@@ -26,7 +26,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-          cache: pip
       - name: Install Mach-O analyzer
         run: python -m pip install 'lief==0.17.5'
       - name: Download, verify and audit shard
@@ -54,7 +53,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v6
         with:
           pattern: ipa-corpus-shard-*
           path: corpus-results
