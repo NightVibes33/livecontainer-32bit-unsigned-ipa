@@ -468,3 +468,83 @@ if 'case LC32CoreGraphicsOpContextAddLines:' not in x:
  if anchor not in x:raise SystemExit('fifth switch anchor missing')
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
 print('CoreGraphics: added 7 typed geometry array exports')
+
+
+# sixth typed provider and font batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpDataConsumerCreateWithCFData = 150' not in h:
+ anchor='    LC32CoreGraphicsOpContextSetLineDash = 149,\n'
+ if anchor not in h:raise SystemExit('sixth opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpDataConsumerCreateWithCFData = 150,
+    LC32CoreGraphicsOpDataProviderCopyData = 151,
+    LC32CoreGraphicsOpDataProviderCreateWithCFData = 152,
+    LC32CoreGraphicsOpFontCopyPostScriptName = 153,
+    LC32CoreGraphicsOpFontCopyTableForTag = 154,
+    LC32CoreGraphicsOpFontCreateWithDataProvider = 155,
+    LC32CoreGraphicsOpFontCreateWithFontName = 156,
+    LC32CoreGraphicsOpFontGetAscent = 157,
+    LC32CoreGraphicsOpFontGetCapHeight = 158,
+    LC32CoreGraphicsOpFontGetDescent = 159,
+    LC32CoreGraphicsOpFontGetUnitsPerEm = 160,
+    LC32CoreGraphicsOpFontGetXHeight = 161,
+    LC32CoreGraphicsOpLayerGetContext = 162,
+''');header.write_text(h)
+
+g=guest.read_text()
+if 'CGDataConsumerRef CGDataConsumerCreateWithCFData(' not in g:
+ g += r'''
+CGDataConsumerRef CGDataConsumerCreateWithCFData(CFMutableDataRef d) { return d?(CGDataConsumerRef)LC32_CG_CALL(LC32CoreGraphicsOpDataConsumerCreateWithCFData,LC32_CG_HOST(d)):NULL; }
+CFDataRef CGDataProviderCopyData(CGDataProviderRef p) { return p?(CFDataRef)LC32_CG_CALL(LC32CoreGraphicsOpDataProviderCopyData,LC32_CG_HOST(p)):NULL; }
+CGDataProviderRef CGDataProviderCreateWithCFData(CFDataRef d) { return d?(CGDataProviderRef)LC32_CG_CALL(LC32CoreGraphicsOpDataProviderCreateWithCFData,LC32_CG_HOST(d)):NULL; }
+CFStringRef CGFontCopyPostScriptName(CGFontRef f) { return f?(CFStringRef)LC32_CG_CALL(LC32CoreGraphicsOpFontCopyPostScriptName,LC32_CG_HOST(f)):NULL; }
+CFDataRef CGFontCopyTableForTag(CGFontRef f,uint32_t tag) { return f?(CFDataRef)LC32_CG_CALL(LC32CoreGraphicsOpFontCopyTableForTag,LC32_CG_HOST(f),LC32_CG_U32(tag)):NULL; }
+CGFontRef CGFontCreateWithDataProvider(CGDataProviderRef p) { return p?(CGFontRef)LC32_CG_CALL(LC32CoreGraphicsOpFontCreateWithDataProvider,LC32_CG_HOST(p)):NULL; }
+CGFontRef CGFontCreateWithFontName(CFStringRef n) { return n?(CGFontRef)LC32_CG_CALL(LC32CoreGraphicsOpFontCreateWithFontName,LC32_CG_HOST(n)):NULL; }
+int CGFontGetAscent(CGFontRef f) { return f?(int32_t)LC32_CG_CALL(LC32CoreGraphicsOpFontGetAscent,LC32_CG_HOST(f)):0; }
+int CGFontGetCapHeight(CGFontRef f) { return f?(int32_t)LC32_CG_CALL(LC32CoreGraphicsOpFontGetCapHeight,LC32_CG_HOST(f)):0; }
+int CGFontGetDescent(CGFontRef f) { return f?(int32_t)LC32_CG_CALL(LC32CoreGraphicsOpFontGetDescent,LC32_CG_HOST(f)):0; }
+int CGFontGetUnitsPerEm(CGFontRef f) { return f?(int32_t)LC32_CG_CALL(LC32CoreGraphicsOpFontGetUnitsPerEm,LC32_CG_HOST(f)):0; }
+int CGFontGetXHeight(CGFontRef f) { return f?(int32_t)LC32_CG_CALL(LC32CoreGraphicsOpFontGetXHeight,LC32_CG_HOST(f)):0; }
+CGContextRef CGLayerGetContext(CGLayerRef l) { return l?(CGContextRef)LC32_CG_CALL(LC32CoreGraphicsOpLayerGetContext,LC32_CG_HOST(l)):NULL; }
+''';guest.write_text(g)
+
+x=host.read_text()
+if 'case LC32CoreGraphicsOpDataConsumerCreateWithCFData:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpDataConsumerCreateWithCFData: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CFMutableDataRef d=SlotHostObject<CFMutableDataRef>(call,0);CGDataConsumerRef r=d?CGDataConsumerCreateWithCFData(d):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpDataProviderCopyData: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGDataProviderRef p=SlotHostObject<CGDataProviderRef>(call,0);CFDataRef r=p?CGDataProviderCopyData(p):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpDataProviderCreateWithCFData: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CFDataRef d=SlotHostObject<CFDataRef>(call,0);CGDataProviderRef r=d?CGDataProviderCreateWithCFData(d):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpFontCopyPostScriptName: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGFontRef f=SlotHostObject<CGFontRef>(call,0);CFStringRef r=f?CGFontCopyPostScriptName(f):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpFontCopyTableForTag: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGFontRef f=SlotHostObject<CGFontRef>(call,0);CFDataRef r=f?CGFontCopyTableForTag(f,SlotU32(call,1)):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpFontCreateWithDataProvider: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGDataProviderRef p=SlotHostObject<CGDataProviderRef>(call,0);CGFontRef r=p?CGFontCreateWithDataProvider(p):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpFontCreateWithFontName: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CFStringRef n=SlotHostObject<CFStringRef>(call,0);CGFontRef r=n?CGFontCreateWithFontName(n):nullptr;return r?LC32GuestObjectForOwnedHostObject(r):0;
+        }
+        case LC32CoreGraphicsOpFontGetAscent:
+        case LC32CoreGraphicsOpFontGetCapHeight:
+        case LC32CoreGraphicsOpFontGetDescent:
+        case LC32CoreGraphicsOpFontGetUnitsPerEm:
+        case LC32CoreGraphicsOpFontGetXHeight: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGFontRef f=SlotHostObject<CGFontRef>(call,0);if(!f)return 0;int v;
+            if(opcode==LC32CoreGraphicsOpFontGetAscent)v=CGFontGetAscent(f);else if(opcode==LC32CoreGraphicsOpFontGetCapHeight)v=CGFontGetCapHeight(f);else if(opcode==LC32CoreGraphicsOpFontGetDescent)v=CGFontGetDescent(f);else if(opcode==LC32CoreGraphicsOpFontGetUnitsPerEm)v=CGFontGetUnitsPerEm(f);else v=CGFontGetXHeight(f);return static_cast<u32>(v);
+        }
+        case LC32CoreGraphicsOpLayerGetContext: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGLayerRef l=SlotHostObject<CGLayerRef>(call,0);CGContextRef r=l?CGLayerGetContext(l):nullptr;return r?[(id)r guest_self]:0;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('sixth switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
+print('CoreGraphics: added 13 typed provider/font exports')
