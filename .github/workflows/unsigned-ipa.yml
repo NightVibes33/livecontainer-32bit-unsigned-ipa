@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '18'
+      LIVEEXEC32_BUILD_REVISION: '19'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -231,7 +231,7 @@ jobs:
           # implementations are the same armv7 compatibility images built
           # above; no host filesystem path or ARM32 pointer is exposed.
           GUEST_ROOT=build/LiveExec32/Resources/RootFS
-          for framework in CoreSurface GraphicsServices WebKit; do
+          for framework in CoreSurface GraphicsServices PlugInKit WebKit; do
             source="$GUEST_ROOT/System/Library/Frameworks/$framework.framework"
             destination="$GUEST_ROOT/System/Library/PrivateFrameworks/$framework.framework"
             test -f "$source/$framework"
@@ -240,6 +240,13 @@ jobs:
             cp "$source/Info.plist" "$destination/Info.plist"
             chmod 0755 "$destination/$framework"
           done
+
+          # The iOS resolver dylib contributes one legacy routine used by an
+          # embedded Workflow framework. LC32 contains the real ARM32 routine;
+          # this compatibility image preserves the historical load path.
+          cp "$GUEST_ROOT/System/Library/Frameworks/LC32.framework/LC32" \
+            "$GUEST_ROOT/usr/lib/libresolv.9.dylib"
+          chmod 0755 "$GUEST_ROOT/usr/lib/libresolv.9.dylib"
 
           bash .github/scripts/build-guest-libiconv.sh build/LiveExec32/Resources/RootFS
           gmake -C build/LiveExec32 package
@@ -281,9 +288,11 @@ jobs:
           for framework in Accelerate ImageIO MediaAccessibility VideoToolbox; do
             test -f "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/$framework.framework/$framework"
           done
-          for framework in CoreSurface GraphicsServices WebKit; do
+          for framework in CoreSurface GraphicsServices PlugInKit WebKit; do
             test -f "$LIVEEXEC_APP/RootFS/System/Library/PrivateFrameworks/$framework.framework/$framework"
           done
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libresolv.9.dylib"
+          nm -gU "$LIVEEXEC_APP/RootFS/usr/lib/libresolv.9.dylib" | grep ' _res_9_b64_ntop$'
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
