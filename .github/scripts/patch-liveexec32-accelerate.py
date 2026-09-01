@@ -4,7 +4,7 @@ from pathlib import Path
 
 path = Path("build/LiveExec32/GuestFrameworks/Accelerate/Accelerate.m")
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(r'''@import Accelerate;
+path.write_text(r'''#import <Accelerate/Accelerate.h>
 
 #include <limits.h>
 #include <math.h>
