@@ -16,6 +16,38 @@ def choose_arm(binary):
             return b
     return bins[0] if bins else None
 
+MACH_MAGICS = {
+    b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
+    b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+    b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",
+}
+
+def is_macho_member(archive, member):
+    if member.is_dir() or member.file_size < 4:
+        return False
+    with archive.open(member) as stream:
+        return stream.read(4) in MACH_MAGICS
+
+def describe_macho(path, relative_name):
+    parsed=lief.MachO.parse(str(path))
+    binary=choose_arm(parsed)
+    if binary is None: raise ValueError(f"Mach-O parse produced no slice: {relative_name}")
+    imported=[]
+    for sym in binary.imported_symbols:
+        item={"name":sym.name,"ordinal":sym.library_ordinal}
+        if sym.has_binding_info:
+            item["weak"]=bool(sym.binding_info.weak_import)
+            item["address"]=int(sym.binding_info.address)
+        imported.append(item)
+    return {
+      "path":relative_name,"cpu_type":str(binary.header.cpu_type),
+      "file_type":str(binary.header.file_type),"pie":bool(binary.is_pie),
+      "encrypted":bool(binary.has_encryption_info and binary.encryption_info.crypt_id),
+      "libraries":[{"name":x.name,"command":str(x.command)} for x in binary.libraries],
+      "imports":imported,
+    }
+
 def detect_markers(blob):
     checks={
       "unity": [b"UnityEngine",b"globalgamemanagers",b"mainData"],
@@ -52,29 +84,30 @@ def audit(entry, base, work):
         info=plistlib.loads(z.read(plists[0]))
         app_root=plists[0].filename[:-len("Info.plist")]
         executable=app_root+info["CFBundleExecutable"]
-        member=z.getinfo(executable)
-        exe_path=work/"Executable"
-        with z.open(member) as src,exe_path.open("wb") as dst: shutil.copyfileobj(src,dst)
         resource_names=[i.filename for i in infos]
-    parsed=lief.MachO.parse(str(exe_path))
-    binary=choose_arm(parsed)
-    if binary is None: raise ValueError("Mach-O parse produced no slice")
-    imported=[]
-    for sym in binary.imported_symbols:
-        item={"name":sym.name,"ordinal":sym.library_ordinal}
-        if sym.has_binding_info:
-            item["weak"]=bool(sym.binding_info.weak_import)
-            item["address"]=int(sym.binding_info.address)
-        imported.append(item)
-    libs=[{"name":x.name,"command":str(x.command)} for x in binary.libraries]
+        macho_infos=[i for i in infos if i.filename.startswith(app_root) and is_macho_member(z,i)]
+        images=[]
+        primary=None
+        for index,macho_info in enumerate(macho_infos):
+            image_path=work/f"MachO-{index}"
+            with z.open(macho_info) as src,image_path.open("wb") as dst:
+                shutil.copyfileobj(src,dst)
+            relative=macho_info.filename[len(app_root):]
+            description=describe_macho(image_path,relative)
+            images.append(description)
+            if macho_info.filename==executable:
+                primary=description
+                exe_path=image_path
+        if primary is None: raise ValueError("main executable Mach-O missing")
     raw=exe_path.read_bytes()
     return {
       "status":"ok","archive_name":name,"archive_url":url,"archive_size":actual_size,
       "bundle_id":info.get("CFBundleIdentifier"),"bundle_version":info.get("CFBundleVersion"),
       "short_version":info.get("CFBundleShortVersionString"),"minimum_os":info.get("MinimumOSVersion"),
-      "executable":info.get("CFBundleExecutable"),"cpu_type":str(binary.header.cpu_type),
-      "file_type":str(binary.header.file_type),"pie":bool(binary.is_pie),"encrypted":bool(binary.has_encryption_info and binary.encryption_info.crypt_id),
-      "libraries":libs,"imports":imported,"markers":detect_markers(raw),
+      "executable":info.get("CFBundleExecutable"),"cpu_type":primary["cpu_type"],
+      "file_type":primary["file_type"],"pie":primary["pie"],"encrypted":primary["encrypted"],
+      "libraries":primary["libraries"],"imports":primary["imports"],"images":images,
+      "markers":detect_markers(raw),
       "has_managed":any("/Data/Managed/" in x for x in resource_names),
       "has_unity_data":any(x.endswith("/Data/mainData") or x.endswith("/Data/globalgamemanagers") for x in resource_names),
       "framework_count":sum(1 for x in resource_names if ".app/Frameworks/" in x and x.endswith(".framework/Info.plist")),

@@ -25,26 +25,46 @@ def main():
         app_id = app.get("bundle_id") or app.get("archive_name")
         if app_id in unique:
             raise SystemExit(f"duplicate app id: {app_id}")
-        libs = app["libraries"]
+        images = app.get("images") or [{
+            "path": app.get("executable"),
+            "libraries": app["libraries"],
+            "imports": app["imports"],
+        }]
         imports = defaultdict(lambda: {"required": set(), "weak": set()})
-        for symbol in app["imports"]:
-            ordinal = symbol.get("ordinal")
-            if not isinstance(ordinal, int) or not 1 <= ordinal <= len(libs):
-                continue
-            library = libs[ordinal - 1]["name"]
-            strength = "weak" if symbol.get("weak", False) else "required"
-            imports[library][strength].add(symbol["name"])
+        all_libraries = set()
+        image_contract = {}
+        for image in images:
+            libs = image["libraries"]
+            all_libraries.update(x["name"] for x in libs)
+            image_imports = defaultdict(lambda: {"required": set(), "weak": set()})
+            for symbol in image["imports"]:
+                ordinal = symbol.get("ordinal")
+                if not isinstance(ordinal, int) or not 1 <= ordinal <= len(libs):
+                    continue
+                library = libs[ordinal - 1]["name"]
+                strength = "weak" if symbol.get("weak", False) else "required"
+                imports[library][strength].add(symbol["name"])
+                image_imports[library][strength].add(symbol["name"])
+            image_contract[image["path"]] = {
+                "libraries": sorted({x["name"] for x in libs}),
+                "imports": {
+                    lib: {kind: sorted(names) for kind, names in groups.items()}
+                    for lib, groups in sorted(image_imports.items())
+                },
+            }
         unique[app_id] = {
             "minimum_os": app.get("minimum_os"),
             "markers": sorted(app.get("markers", [])),
-            "libraries": sorted({x["name"] for x in libs}),
+            "image_count": len(images),
+            "images": image_contract,
+            "libraries": sorted(all_libraries),
             "imports": {
                 lib: {kind: sorted(names) for kind, names in groups.items()}
                 for lib, groups in sorted(imports.items())
             },
         }
     output = {
-        "schema": 1,
+        "schema": 2,
         "app_count": len(unique),
         "apps": {key: unique[key] for key in sorted(unique)},
     }
