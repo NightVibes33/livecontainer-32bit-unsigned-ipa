@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12b1f782d760a43f47c9f7f77f1c270f7d888aac
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '17'
+      LIVEEXEC32_BUILD_REVISION: '18'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -212,6 +212,7 @@ jobs:
           set -euxo pipefail
           python3 .github/scripts/patch-liveexec32-focus-graphics.py
           python3 .github/scripts/patch-liveexec32-focus-image-bridge.py
+          python3 .github/scripts/patch-liveexec32-missing-images.py
           python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-uikit.py
           python3 .github/scripts/patch-liveexec32-corefoundation.py
@@ -225,6 +226,21 @@ jobs:
           gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
+
+          # Preserve exact legacy private-framework load paths. The guest
+          # implementations are the same armv7 compatibility images built
+          # above; no host filesystem path or ARM32 pointer is exposed.
+          GUEST_ROOT=build/LiveExec32/Resources/RootFS
+          for framework in CoreSurface GraphicsServices WebKit; do
+            source="$GUEST_ROOT/System/Library/Frameworks/$framework.framework"
+            destination="$GUEST_ROOT/System/Library/PrivateFrameworks/$framework.framework"
+            test -f "$source/$framework"
+            mkdir -p "$destination"
+            cp "$source/$framework" "$destination/$framework"
+            cp "$source/Info.plist" "$destination/Info.plist"
+            chmod 0755 "$destination/$framework"
+          done
+
           bash .github/scripts/build-guest-libiconv.sh build/LiveExec32/Resources/RootFS
           gmake -C build/LiveExec32 package
 
@@ -262,6 +278,12 @@ jobs:
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/UIKit.framework/UIKit" | grep ' _CGPointFromString$'
           test -f "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreVideo.framework/CoreVideo"
           nm -gU "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreVideo.framework/CoreVideo" | grep ' _kCVPixelBufferPixelFormatTypeKey$'
+          for framework in Accelerate ImageIO MediaAccessibility VideoToolbox; do
+            test -f "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/$framework.framework/$framework"
+          done
+          for framework in CoreSurface GraphicsServices WebKit; do
+            test -f "$LIVEEXEC_APP/RootFS/System/Library/PrivateFrameworks/$framework.framework/$framework"
+          done
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
