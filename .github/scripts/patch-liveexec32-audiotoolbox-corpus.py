@@ -28,3 +28,52 @@ OSStatus AUGraphStop(AUGraph value){LC32GuestAUGraph *g=LC32Graph(value);if(!g)r
 '''
  p.write_text(s)
 print('AudioToolbox: added guest-owned AUGraph over safe RemoteIO PCM output')
+
+
+# Typed parameter, format-property and ExtAudioFile creation bridge batch.
+R=Path('build/LiveExec32');H=R/'GuestFrameworks/AudioToolbox/LC32AudioToolboxBridge.h';G=R/'GuestFrameworks/AudioToolbox/AudioToolbox.m';X=R/'HostFrameworks/AudioToolbox/AudioToolbox.mm'
+h=H.read_text();a='    LC32AudioToolboxOpRemoteIOOutputStop = 43,\n'
+if 'LC32AudioToolboxOpAudioFormatGetProperty = 44' not in h:
+ if a not in h:raise SystemExit('audio opcode anchor missing')
+ h=h.replace(a,a+r'''    LC32AudioToolboxOpAudioFormatGetProperty = 44,
+    LC32AudioToolboxOpAudioUnitGetParameter = 45,
+    LC32AudioToolboxOpAudioUnitSetParameter = 46,
+    LC32AudioToolboxOpExtAudioFileCreateWithURL = 47,
+    LC32AudioToolboxOpExtAudioFileWrapAudioFileID = 48,
+''');H.write_text(h)
+g=G.read_text()
+old='    AURenderCallbackStruct renderCallback;\n    pthread_mutex_t mutex;'
+if 'parameters[64]' not in g:
+ if old not in g:raise SystemExit('silent unit field anchor missing')
+ g=g.replace(old,'    AURenderCallbackStruct renderCallback;\n    struct { AudioUnitParameterID id; AudioUnitScope scope; AudioUnitElement element; AudioUnitParameterValue value; BOOL used; } parameters[64];\n    pthread_mutex_t mutex;',1)
+if 'OSStatus AudioUnitGetParameter(' not in g:
+ g+=r'''
+OSStatus AudioUnitGetParameter(AudioUnit unit,AudioUnitParameterID id,AudioUnitScope scope,AudioUnitElement element,AudioUnitParameterValue *out){LC32SilentAudioUnit *u=LC32SilentAudioUnitForHandle(unit);if(!u||!out)return kAudio_ParamError;pthread_mutex_lock(&u->mutex);OSStatus status=kAudioUnitErr_InvalidParameter;for(size_t i=0;i<64;i++)if(u->parameters[i].used&&u->parameters[i].id==id&&u->parameters[i].scope==scope&&u->parameters[i].element==element){*out=u->parameters[i].value;status=noErr;break;}pthread_mutex_unlock(&u->mutex);return status;}
+OSStatus AudioUnitSetParameter(AudioUnit unit,AudioUnitParameterID id,AudioUnitScope scope,AudioUnitElement element,AudioUnitParameterValue value,UInt32 offset){(void)offset;LC32SilentAudioUnit *u=LC32SilentAudioUnitForHandle(unit);if(!u)return kAudio_ParamError;pthread_mutex_lock(&u->mutex);size_t freeIndex=64;for(size_t i=0;i<64;i++){if(u->parameters[i].used&&u->parameters[i].id==id&&u->parameters[i].scope==scope&&u->parameters[i].element==element){freeIndex=i;break;}if(!u->parameters[i].used&&freeIndex==64)freeIndex=i;}if(freeIndex==64){pthread_mutex_unlock(&u->mutex);return kAudioUnitErr_TooManyFramesToProcess;}u->parameters[freeIndex].id=id;u->parameters[freeIndex].scope=scope;u->parameters[freeIndex].element=element;u->parameters[freeIndex].value=value;u->parameters[freeIndex].used=YES;pthread_mutex_unlock(&u->mutex);return noErr;}
+OSStatus AudioFormatGetProperty(AudioFormatPropertyID property,UInt32 specifierSize,const void *specifier,UInt32 *ioSize,void *out){if(!ioSize||(specifierSize&&!specifier))return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpAudioFormatGetProperty,LC32_AUDIO_U32(property),LC32_AUDIO_U32(specifierSize),LC32_AUDIO_U32((uintptr_t)specifier),LC32_AUDIO_U32((uintptr_t)ioSize),LC32_AUDIO_U32((uintptr_t)out));}
+OSStatus ExtAudioFileCreateWithURL(CFURLRef url,AudioFileTypeID type,const AudioStreamBasicDescription *format,const AudioChannelLayout *layout,UInt32 flags,ExtAudioFileRef *out){if(!url||!format||!out)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpExtAudioFileCreateWithURL,[(id)url host_self],LC32_AUDIO_U32(type),LC32_AUDIO_U32((uintptr_t)format),LC32_AUDIO_U32((uintptr_t)layout),LC32_AUDIO_U32(flags),LC32_AUDIO_U32((uintptr_t)out));}
+OSStatus ExtAudioFileWrapAudioFileID(AudioFileID file,Boolean writing,ExtAudioFileRef *out){if(!file||!out)return kAudio_ParamError;return (OSStatus)LC32_AUDIO_CALL(LC32AudioToolboxOpExtAudioFileWrapAudioFileID,LC32_AUDIO_U32((uintptr_t)file),LC32_AUDIO_U32(writing),LC32_AUDIO_U32((uintptr_t)out));}
+'''
+G.write_text(g)
+x=X.read_text()
+if 'OSStatus DispatchCorpusAudioFormatGetProperty' not in x:
+ helper=r'''
+OSStatus DispatchCorpusAudioFormatGetProperty(const LC32AudioToolboxCall &call){if(!RequireSlots(call,5)||!SlotU32(call,3))return kAudio_ParamError;u32 specSize=SlotU32(call,1),requested=0;if(specSize>kMaximumPropertyBytes||!ReadGuestU32(SlotU32(call,3),requested)||requested>kMaximumPropertyBytes||(specSize&&!SlotU32(call,2))||(requested&&!SlotU32(call,4)))return kAudio_ParamError;std::vector<uint8_t> spec(specSize),out(requested?requested:1);if(specSize&&Dynarmic_mem_1read(SlotU32(call,2),specSize,reinterpret_cast<char *>(spec.data()))!=0)return kAudio_ParamError;UInt32 returned=requested;OSStatus status=AudioFormatGetProperty(SlotU32(call,0),specSize,specSize?spec.data():nullptr,&returned,requested?out.data():nullptr);if(!WriteGuestU32(SlotU32(call,3),returned))return kAudio_ParamError;if(status==noErr&&returned&&(returned>requested||Dynarmic_mem_1write(SlotU32(call,4),returned,reinterpret_cast<char *>(out.data()))!=0))return kAudio_ParamError;return status;}
+OSStatus DispatchCorpusExtAudioFileCreate(const LC32AudioToolboxCall &call){if(!RequireSlots(call,6)||!SlotU32(call,0)||!SlotU32(call,2)||!SlotU32(call,5))return kAudio_ParamError;AudioStreamBasicDescription format={};if(Dynarmic_mem_1read(SlotU32(call,2),sizeof(format),reinterpret_cast<char *>(&format))!=0)return kAudio_ParamError;std::vector<uint8_t> layoutBytes;AudioChannelLayout *layout=nullptr;if(SlotU32(call,3)){struct{u32 tag,bitmap,count;} header={};if(Dynarmic_mem_1read(SlotU32(call,3),sizeof(header),reinterpret_cast<char *>(&header))!=0||header.count>1024)return kAudio_ParamError;size_t bytes=offsetof(AudioChannelLayout,mChannelDescriptions)+header.count*sizeof(AudioChannelDescription);layoutBytes.resize(bytes);if(Dynarmic_mem_1read(SlotU32(call,3),bytes,reinterpret_cast<char *>(layoutBytes.data()))!=0)return kAudio_ParamError;layout=reinterpret_cast<AudioChannelLayout *>(layoutBytes.data());}ExtAudioFileRef file=nullptr;OSStatus status=ExtAudioFileCreateWithURL(SlotHostObject<CFURLRef>(call,0),SlotU32(call,1),&format,layout,SlotU32(call,4),&file);if(status!=noErr)return status;u32 token=InsertExtAudioFile(file);if(!token||!WriteGuestU32(SlotU32(call,5),token)){if(token){auto e=TakeExtAudioFile(token);if(e&&e->file)ExtAudioFileDispose(e->file);}else ExtAudioFileDispose(file);return kAudio_ParamError;}return noErr;}
+OSStatus DispatchCorpusExtAudioFileWrap(const LC32AudioToolboxCall &call){if(!RequireSlots(call,3)||!SlotU32(call,2))return kAudio_ParamError;auto source=FindAudioFile(SlotU32(call,0));if(!source)return kAudio_ParamError;ExtAudioFileRef file=nullptr;OSStatus status;{std::lock_guard<std::mutex> lock(source->mutex);if(!source->file)return kAudio_ParamError;status=ExtAudioFileWrapAudioFileID(source->file,SlotU32(call,1)!=0,&file);}if(status!=noErr)return status;u32 token=InsertExtAudioFile(file);if(!token||!WriteGuestU32(SlotU32(call,2),token)){if(token){auto e=TakeExtAudioFile(token);if(e&&e->file)ExtAudioFileDispose(e->file);}else ExtAudioFileDispose(file);return kAudio_ParamError;}return noErr;}
+
+'''
+ a='} // namespace\n\nextern "C" u32 LC32_AudioToolbox_Dispatch'
+ if a not in x:raise SystemExit('audio helper anchor missing')
+ x=x.replace(a,helper+a,1)
+if 'case LC32AudioToolboxOpAudioFormatGetProperty:' not in x:
+ cases=r'''
+        case LC32AudioToolboxOpAudioFormatGetProperty:return static_cast<u32>(DispatchCorpusAudioFormatGetProperty(call));
+        case LC32AudioToolboxOpExtAudioFileCreateWithURL:return static_cast<u32>(DispatchCorpusExtAudioFileCreate(call));
+        case LC32AudioToolboxOpExtAudioFileWrapAudioFileID:return static_cast<u32>(DispatchCorpusExtAudioFileWrap(call));
+'''
+ a='        case LC32AudioToolboxOpRemoteIOOutputStart:'
+ if a not in x:raise SystemExit('audio switch anchor missing')
+ x=x.replace(a,cases+a,1)
+X.write_text(x)
+print('AudioToolbox: added parameters, format properties, and ExtAudioFile creation')
