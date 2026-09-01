@@ -332,3 +332,70 @@ if 'case LC32CoreGraphicsOpContextConvertPointToDeviceSpace:' not in x:
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1)
  host.write_text(x)
 print('CoreGraphics: added 13 typed geometry query exports')
+
+
+# fourth typed path geometry batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpPathAddArc = 135' not in h:
+ anchor='    LC32CoreGraphicsOpLayerGetSize = 134,\n'
+ if anchor not in h:raise SystemExit('fourth opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpPathAddArc = 135,
+    LC32CoreGraphicsOpPathAddRelativeArc = 136,
+    LC32CoreGraphicsOpPathAddQuadCurveToPoint = 137,
+    LC32CoreGraphicsOpPathAddPath = 138,
+    LC32CoreGraphicsOpPathAddRoundedRect = 139,
+    LC32CoreGraphicsOpPathCreateWithEllipseInRect = 140,
+    LC32CoreGraphicsOpPathCreateWithRoundedRect = 141,
+    LC32CoreGraphicsOpPathCreateCopyByTransformingPath = 142,
+''')
+ header.write_text(h)
+
+def ts(t):
+ return ','.join([f'LC32_CG_U32({t} != NULL)',*[f'{t} ? LC32_CG_F32({t}->{n}) : 0' for n in ('a','b','c','d','tx','ty')]])
+g=guest.read_text()
+if 'void CGPathAddArc(CGMutablePathRef' not in g:
+ block=r'''
+void CGPathAddArc(CGMutablePathRef p,const CGAffineTransform *t,CGFloat x,CGFloat y,CGFloat radius,CGFloat start,CGFloat end,bool clockwise) { if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddArc,LC32_CG_HOST(p),TRANSFORM,LC32_CG_F32(x),LC32_CG_F32(y),LC32_CG_F32(radius),LC32_CG_F32(start),LC32_CG_F32(end),LC32_CG_U32(clockwise)); }
+void CGPathAddRelativeArc(CGMutablePathRef p,const CGAffineTransform *t,CGFloat x,CGFloat y,CGFloat radius,CGFloat start,CGFloat delta) { if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddRelativeArc,LC32_CG_HOST(p),TRANSFORM,LC32_CG_F32(x),LC32_CG_F32(y),LC32_CG_F32(radius),LC32_CG_F32(start),LC32_CG_F32(delta)); }
+void CGPathAddQuadCurveToPoint(CGMutablePathRef p,const CGAffineTransform *t,CGFloat cx,CGFloat cy,CGFloat x,CGFloat y) { if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddQuadCurveToPoint,LC32_CG_HOST(p),TRANSFORM,LC32_CG_F32(cx),LC32_CG_F32(cy),LC32_CG_F32(x),LC32_CG_F32(y)); }
+void CGPathAddPath(CGMutablePathRef p,const CGAffineTransform *t,CGPathRef other) { if(p&&other)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddPath,LC32_CG_HOST(p),TRANSFORM,LC32_CG_HOST(other)); }
+void CGPathAddRoundedRect(CGMutablePathRef p,const CGAffineTransform *t,CGRect r,CGFloat cw,CGFloat ch) { if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathAddRoundedRect,LC32_CG_HOST(p),TRANSFORM,LC32_CG_F32(r.origin.x),LC32_CG_F32(r.origin.y),LC32_CG_F32(r.size.width),LC32_CG_F32(r.size.height),LC32_CG_F32(cw),LC32_CG_F32(ch)); }
+CGPathRef CGPathCreateWithEllipseInRect(CGRect r,const CGAffineTransform *t) { return (CGPathRef)LC32_CG_CALL(LC32CoreGraphicsOpPathCreateWithEllipseInRect,TRANSFORM,LC32_CG_F32(r.origin.x),LC32_CG_F32(r.origin.y),LC32_CG_F32(r.size.width),LC32_CG_F32(r.size.height)); }
+CGPathRef CGPathCreateWithRoundedRect(CGRect r,CGFloat cw,CGFloat ch,const CGAffineTransform *t) { return (CGPathRef)LC32_CG_CALL(LC32CoreGraphicsOpPathCreateWithRoundedRect,TRANSFORM,LC32_CG_F32(r.origin.x),LC32_CG_F32(r.origin.y),LC32_CG_F32(r.size.width),LC32_CG_F32(r.size.height),LC32_CG_F32(cw),LC32_CG_F32(ch)); }
+CGPathRef CGPathCreateCopyByTransformingPath(CGPathRef p,const CGAffineTransform *t) { return p?(CGPathRef)LC32_CG_CALL(LC32CoreGraphicsOpPathCreateCopyByTransformingPath,LC32_CG_HOST(p),TRANSFORM):NULL; }
+'''.replace('TRANSFORM',ts('t'))
+ g += block;guest.write_text(g)
+
+x=host.read_text()
+if 'case LC32CoreGraphicsOpPathAddArc:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpPathAddArc:
+        case LC32CoreGraphicsOpPathAddRelativeArc: {
+            const bool relative=opcode==LC32CoreGraphicsOpPathAddRelativeArc; if(!RequireCoreGraphicsSlots(call,relative?13:14))return 0;
+            CGMutablePathRef p=SlotHostObject<CGMutablePathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;
+            if(relative)CGPathAddRelativeArc(p,t,SlotCGFloat(call,8),SlotCGFloat(call,9),SlotCGFloat(call,10),SlotCGFloat(call,11),SlotCGFloat(call,12));
+            else{u32 clockwise=SlotU32(call,13);if(clockwise>1)return 0;CGPathAddArc(p,t,SlotCGFloat(call,8),SlotCGFloat(call,9),SlotCGFloat(call,10),SlotCGFloat(call,11),SlotCGFloat(call,12),clockwise!=0);}return 1;
+        }
+        case LC32CoreGraphicsOpPathAddQuadCurveToPoint: {
+            if(!RequireCoreGraphicsSlots(call,12))return 0;CGMutablePathRef p=SlotHostObject<CGMutablePathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;
+            CGPathAddQuadCurveToPoint(p,t,SlotCGFloat(call,8),SlotCGFloat(call,9),SlotCGFloat(call,10),SlotCGFloat(call,11));return 1;
+        }
+        case LC32CoreGraphicsOpPathAddPath: {
+            if(!RequireCoreGraphicsSlots(call,9))return 0;CGMutablePathRef p=SlotHostObject<CGMutablePathRef>(call,0);CGPathRef other=SlotHostObject<CGPathRef>(call,8);if(!p||!other)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;CGPathAddPath(p,t,other);return 1;
+        }
+        case LC32CoreGraphicsOpPathAddRoundedRect: {
+            if(!RequireCoreGraphicsSlots(call,14))return 0;CGMutablePathRef p=SlotHostObject<CGMutablePathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;CGPathAddRoundedRect(p,t,SlotRect(call,8),SlotCGFloat(call,12),SlotCGFloat(call,13));return 1;
+        }
+        case LC32CoreGraphicsOpPathCreateWithEllipseInRect:
+        case LC32CoreGraphicsOpPathCreateWithRoundedRect: {
+            const bool rounded=opcode==LC32CoreGraphicsOpPathCreateWithRoundedRect;if(!RequireCoreGraphicsSlots(call,rounded?13:11))return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,0,1,storage,t))return 0;
+            CGRect r=SlotRect(call,7);CGPathRef result=rounded?CGPathCreateWithRoundedRect(r,SlotCGFloat(call,11),SlotCGFloat(call,12),t):CGPathCreateWithEllipseInRect(r,t);return result?LC32GuestObjectForOwnedHostObject(result):0;
+        }
+        case LC32CoreGraphicsOpPathCreateCopyByTransformingPath: {
+            if(!RequireCoreGraphicsSlots(call,8))return 0;CGPathRef p=SlotHostObject<CGPathRef>(call,0);if(!p)return 0;CGAffineTransform storage;const CGAffineTransform *t;if(!SlotOptionalTransform(call,1,2,storage,t))return 0;CGPathRef result=CGPathCreateCopyByTransformingPath(p,t);return result?LC32GuestObjectForOwnedHostObject(result):0;
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('fourth switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1);host.write_text(x)
+print('CoreGraphics: added 8 typed path geometry exports')
