@@ -188,6 +188,50 @@ static void test_vimage_box(void) {
         if(output[channel] != 64 + channel) exit(20);
 }
 
+static void release_vimage_pixels(void *userData, void *bufferData) {
+    int *called = userData;
+    ++*called;
+    free(bufferData);
+}
+
+static void test_vimage_cgimage_roundtrip(void) {
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    if(!colorSpace) exit(21);
+    vImage_CGImageFormat format = {
+        8, 32, colorSpace,
+        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Big,
+        0, NULL, kCGRenderingIntentDefault,
+    };
+    const unsigned char pixels[] = {
+        255, 20, 40, 60, 255, 70, 90, 110,
+    };
+    vImage_Buffer source = {(void *)pixels, 1, 2, sizeof(pixels)};
+    vImage_Error error = -1;
+    CGImageRef image = vImageCreateCGImageFromBuffer(&source, &format,
+        NULL, NULL, kvImageNoFlags, &error);
+    if(!image || error != kvImageNoError) exit(22);
+    vImage_Buffer decoded = {0};
+    if(vImageBuffer_InitWithCGImage(&decoded, &format, NULL, image,
+        kvImageNoFlags) != kvImageNoError || !decoded.data) exit(23);
+    const unsigned char *result = decoded.data;
+    for(size_t index = 0; index < sizeof(pixels); ++index)
+        if(result[index] != pixels[index]) exit(24);
+    free(decoded.data);
+    CGImageRelease(image);
+
+    unsigned char *transferred = malloc(sizeof(pixels));
+    if(!transferred) exit(25);
+    for(size_t index = 0; index < sizeof(pixels); ++index)
+        transferred[index] = pixels[index];
+    source.data = transferred;
+    int callbackCount = 0;
+    image = vImageCreateCGImageFromBuffer(&source, &format,
+        release_vimage_pixels, &callbackCount, kvImageNoAllocate, &error);
+    if(!image || error != kvImageNoError || callbackCount != 1) exit(26);
+    CGImageRelease(image);
+    CGColorSpaceRelease(colorSpace);
+}
+
 int main(void) {
     test_float_fft();
     test_double_fft();
@@ -195,6 +239,7 @@ int main(void) {
     test_vimage_buffer_and_histogram();
     test_vimage_matrix();
     test_vimage_box();
+    test_vimage_cgimage_roundtrip();
     puts("Accelerate compatibility behavior passed");
     return 0;
 }

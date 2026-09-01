@@ -124,16 +124,16 @@ constants = {
         ('CBCentralManagerScanOptionAllowDuplicatesKey', 'string'),
     ],
     'CoreData': [
-        ('NSErrorMergePolicy', 'object'),
+        ('NSErrorMergePolicy', 'merge:NSErrorMergePolicyType'),
         ('NSInMemoryStoreType', 'string'),
         ('NSInsertedObjectsKey', 'string'),
         ('NSManagedObjectContextDidSaveNotification', 'string'),
         ('NSManagedObjectContextObjectsDidChangeNotification', 'string'),
-        ('NSMergeByPropertyObjectTrumpMergePolicy', 'object'),
-        ('NSMergeByPropertyStoreTrumpMergePolicy', 'object'),
-        ('NSOverwriteMergePolicy', 'object'),
+        ('NSMergeByPropertyObjectTrumpMergePolicy', 'merge:NSMergeByPropertyObjectTrumpMergePolicyType'),
+        ('NSMergeByPropertyStoreTrumpMergePolicy', 'merge:NSMergeByPropertyStoreTrumpMergePolicyType'),
+        ('NSOverwriteMergePolicy', 'merge:NSOverwriteMergePolicyType'),
         ('NSRefreshedObjectsKey', 'string'),
-        ('NSRollbackMergePolicy', 'object'),
+        ('NSRollbackMergePolicy', 'merge:NSRollbackMergePolicyType'),
         ('NSSQLiteErrorDomain', 'string'),
         ('NSSQLiteManualVacuumOption', 'string'),
         ('NSSQLitePragmasOption', 'string'),
@@ -562,7 +562,6 @@ if len(flat) != 491 or len(set(flat)) != len(flat):
 
 source_header = r'''#import <Foundation/Foundation.h>
 #import <Foundation/Foundation+LC32.h>
-#import <objc/runtime.h>
 
 /* Generated from the exhaustive 40-app ARM32 binding contract. String
  * constants bind to the exact native object, preserving host dictionary-key
@@ -574,13 +573,6 @@ static id LC32CorpusStringConstant(const char *symbol, NSString *fallback) {
     return fallback;
 }
 
-static id LC32CorpusObjectConstant(const char *symbol, const char *className) {
-    const uint64_t hostObject = LC32Dlsym(symbol, NO);
-    Class cls = objc_getClass(className);
-    id object = cls ? class_createInstance(cls, 0) : nil;
-    if(object && hostObject) [object bindHostSelf:hostObject];
-    return object;
-}
 '''
 
 for framework, entries in constants.items():
@@ -594,10 +586,18 @@ for framework, entries in constants.items():
         if kind == "string":
             initializers.append(
                 f'    {storage} = LC32CorpusStringConstant("{symbol}", @"{symbol}");')
-        else:
+        elif kind.startswith("merge:"):
+            merge_type = kind.split(":", 1)[1]
             initializers.append(
-                f'    {storage} = LC32CorpusObjectConstant("{symbol}", "NSMergePolicy");')
-    source = source_header + "\n".join(declarations) + "\n\n"
+                f'    {storage} = [[NSMergePolicy alloc] initWithMergeType:{merge_type}];\n'
+                f'    const uint64_t {storage}Host = LC32Dlsym("{symbol}", NO);\n'
+                f'    if({storage}Host) [{storage} bindHostSelf:{storage}Host];')
+        else:
+            raise SystemExit(f"unsupported constant kind {kind!r} for {framework}:{symbol}")
+    source = source_header
+    if framework == "CoreData":
+        source += "#import <CoreData/CoreData.h>\n\n"
+    source += "\n".join(declarations) + "\n\n"
     source += "__attribute__((constructor))\n"
     source += f"static void LC32Initialize{framework}CorpusConstants(void) {{\n"
     source += "\n".join(initializers) + "\n}\n"

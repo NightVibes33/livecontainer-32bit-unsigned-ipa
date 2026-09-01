@@ -523,5 +523,144 @@ vImage_Error vImageBoxConvolve_ARGB8888(
     return kvImageNoError;
 }
 
+
+static int LC32VImageFormatValid(const vImage_CGImageFormat *format,
+                                   int allowDecode) {
+    if(!format || format->version > 1 || (!allowDecode && format->decode))
+        return 0;
+    switch(format->bitsPerComponent) {
+        case 1: case 2: case 4: case 5: case 8: case 16: case 32:
+            break;
+        default:
+            return 0;
+    }
+    return format->bitsPerPixel >= format->bitsPerComponent;
+}
+
+vImage_Error vImageBuffer_InitWithCGImage(
+        vImage_Buffer *buffer, vImage_CGImageFormat *format,
+        const CGFloat *backgroundColor, CGImageRef image,
+        vImage_Flags flags) {
+    const vImage_Flags allowed = kvImageNoAllocate |
+        kvImagePrintDiagnosticsToConsole | kvImageDoNotTile;
+    if(!buffer || !format || !image) return kvImageNullPointerArgument;
+    if(flags & ~allowed) return kvImageUnknownFlagsBit;
+    if(!LC32VImageFormatValid(format, 0)) return kvImageInvalidImageFormat;
+    const size_t width = CGImageGetWidth(image);
+    const size_t height = CGImageGetHeight(image);
+    if(!width || !height) return kvImageInvalidImageObject;
+    void *providedData = buffer->data;
+    const size_t providedRowBytes = buffer->rowBytes;
+    int allocated = 0;
+    if(flags & kvImageNoAllocate) {
+        if(!providedData || width > (SIZE_MAX - 7) / format->bitsPerPixel)
+            return kvImageInvalidParameter;
+        const size_t minimumRowBytes =
+            (width * format->bitsPerPixel + 7) / 8;
+        if(providedRowBytes < minimumRowBytes ||
+           (height && providedRowBytes > SIZE_MAX / height))
+            return kvImageInvalidRowBytes;
+        buffer->data = providedData;
+        buffer->width = width;
+        buffer->height = height;
+        buffer->rowBytes = providedRowBytes;
+    } else {
+        const vImage_Error result = vImageBuffer_Init(buffer, height, width,
+            format->bitsPerPixel, kvImageNoFlags);
+        if(result != kvImageNoError) return result;
+        allocated = 1;
+    }
+    CGColorSpaceRef colorSpace = format->colorSpace;
+    int releaseColorSpace = 0;
+    if(!colorSpace) {
+        colorSpace = CGColorSpaceCreateDeviceRGB();
+        releaseColorSpace = 1;
+    }
+    CGContextRef context = colorSpace ? CGBitmapContextCreate(buffer->data,
+        width, height, format->bitsPerComponent, buffer->rowBytes, colorSpace,
+        format->bitmapInfo) : NULL;
+    if(releaseColorSpace && colorSpace) CGColorSpaceRelease(colorSpace);
+    if(!context) {
+        if(allocated) free(buffer->data);
+        buffer->data = NULL;
+        return kvImageInvalidImageFormat;
+    }
+    const CGRect bounds = CGRectMake(0, 0, width, height);
+    if(backgroundColor) {
+        CGContextSetFillColor(context, backgroundColor);
+        CGContextFillRect(context, bounds);
+    }
+    CGContextDrawImage(context, bounds, image);
+    if(CGBitmapContextGetData(context) != buffer->data) {
+        CGContextRelease(context);
+        if(allocated) free(buffer->data);
+        buffer->data = NULL;
+        return kvImageInternalError;
+    }
+    CGContextRelease(context);
+    return kvImageNoError;
+}
+
+CGImageRef vImageCreateCGImageFromBuffer(
+        const vImage_Buffer *buffer, const vImage_CGImageFormat *format,
+        void (*callback)(void *userData, void *bufferData), void *userData,
+        vImage_Flags flags, vImage_Error *error) {
+    const vImage_Flags allowed = kvImageNoAllocate |
+        kvImagePrintDiagnosticsToConsole | kvImageHighQualityResampling |
+        kvImageDoNotTile;
+    if(error) *error = kvImageNoError;
+    if(!buffer || !format) {
+        if(error) *error = kvImageNullPointerArgument;
+        return NULL;
+    }
+    if(flags & ~allowed) {
+        if(error) *error = kvImageUnknownFlagsBit;
+        return NULL;
+    }
+    if(!LC32VImageFormatValid(format, 1) || !buffer->data ||
+       buffer->width > (SIZE_MAX - 7) / format->bitsPerPixel) {
+        if(error) *error = kvImageInvalidImageFormat;
+        return NULL;
+    }
+    const size_t minimumRowBytes =
+        (buffer->width * format->bitsPerPixel + 7) / 8;
+    if(buffer->rowBytes < minimumRowBytes ||
+       (buffer->height && buffer->rowBytes > SIZE_MAX / buffer->height)) {
+        if(error) *error = kvImageInvalidRowBytes;
+        return NULL;
+    }
+    const size_t byteCount = buffer->rowBytes * buffer->height;
+    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL,
+        buffer->data, byteCount, NULL);
+    if(!provider) {
+        if(error) *error = kvImageMemoryAllocationError;
+        return NULL;
+    }
+    CGColorSpaceRef colorSpace = format->colorSpace;
+    int releaseColorSpace = 0;
+    if(!colorSpace) {
+        colorSpace = CGColorSpaceCreateDeviceRGB();
+        releaseColorSpace = 1;
+    }
+    CGImageRef image = colorSpace ? CGImageCreate(buffer->width,
+        buffer->height, format->bitsPerComponent, format->bitsPerPixel,
+        buffer->rowBytes, colorSpace, format->bitmapInfo, provider,
+        format->decode, true, format->renderingIntent) : NULL;
+    if(releaseColorSpace && colorSpace) CGColorSpaceRelease(colorSpace);
+    CGDataProviderRelease(provider);
+    if(!image) {
+        if(error) *error = kvImageInvalidImageFormat;
+        return NULL;
+    }
+    /* The bridge copies guest pixels before constructing the native provider.
+     * Calling the ownership callback before return is explicitly permitted by
+     * vImage and prevents native CoreGraphics from retaining an ARM32 pointer. */
+    if(flags & kvImageNoAllocate) {
+        if(callback) callback(userData, buffer->data);
+        else free(buffer->data);
+    }
+    return image;
+}
+
 ''')
-print("Accelerate: implemented guest-memory vDSP, FFT, and ARGB8888 vImage routines")
+print("Accelerate: implemented all corpus vDSP, FFT, and vImage exports")
