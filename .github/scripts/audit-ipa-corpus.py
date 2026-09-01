@@ -14,7 +14,7 @@ def choose_arm(binary):
     for b in bins:
         if "ARM" in str(b.header.cpu_type) and "ARM64" not in str(b.header.cpu_type):
             return b
-    return bins[0] if bins else None
+    return None
 
 MACH_MAGICS = {
     b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
@@ -32,7 +32,7 @@ def is_macho_member(archive, member):
 def describe_macho(path, relative_name):
     parsed=lief.MachO.parse(str(path))
     binary=choose_arm(parsed)
-    if binary is None: raise ValueError(f"Mach-O parse produced no slice: {relative_name}")
+    if binary is None: return None
     imported=[]
     for sym in binary.imported_symbols:
         item={"name":sym.name,"ordinal":sym.library_ordinal}
@@ -94,6 +94,8 @@ def audit(entry, base, work):
                 shutil.copyfileobj(src,dst)
             relative=macho_info.filename[len(app_root):]
             description=describe_macho(image_path,relative)
+            if description is None:
+                continue
             images.append(description)
             if macho_info.filename==executable:
                 primary=description
