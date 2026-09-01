@@ -115,7 +115,9 @@ bool CGAffineTransformEqualToTransform(CGAffineTransform left,
         left.tx == right.tx && left.ty == right.ty;
 }
 
-bool CGSizeEqualToSize(CGSize left, CGSize right) {
+bool LC32CGSizeEqualToSizeExport(CGSize left, CGSize right)
+    __asm__("_CGSizeEqualToSize");
+bool LC32CGSizeEqualToSizeExport(CGSize left, CGSize right) {
     return left.width == right.width && left.height == right.height;
 }
 
@@ -177,7 +179,7 @@ void CGShadingRelease(CGShadingRef shading) {
 }
 """
 for declaration in [
-    "bool CGAffineTransformEqualToTransform(", "bool CGSizeEqualToSize(",
+    "bool CGAffineTransformEqualToTransform(", "LC32CGSizeEqualToSizeExport(",
     "CGColorSpaceRef CGColorSpaceRetain(", "CGFontRef CGFontRetain(",
     "void CGFontRelease(", "CGImageRef CGImageRetain(",
     "CGLayerRef CGLayerRetain(", "void CGLayerRelease(",
