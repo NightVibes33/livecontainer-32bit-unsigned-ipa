@@ -234,3 +234,101 @@ if 'case LC32CoreGraphicsOpContextAddCurveToPoint:' not in x:
  x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1)
  host.write_text(x)
 print('CoreGraphics: added 17 typed context state exports')
+
+
+# third typed geometry query batch
+h=header.read_text()
+if 'LC32CoreGraphicsOpContextConvertPointToDeviceSpace = 122' not in h:
+ anchor='    LC32CoreGraphicsOpContextSetTextMatrix = 121,\n'
+ if anchor not in h:raise SystemExit('third opcode anchor missing')
+ h=h.replace(anchor,anchor+r'''    LC32CoreGraphicsOpContextConvertPointToDeviceSpace = 122,
+    LC32CoreGraphicsOpContextConvertPointToUserSpace = 123,
+    LC32CoreGraphicsOpContextConvertRectToDeviceSpace = 124,
+    LC32CoreGraphicsOpContextConvertRectToUserSpace = 125,
+    LC32CoreGraphicsOpContextGetCTM = 126,
+    LC32CoreGraphicsOpContextGetPathBoundingBox = 127,
+    LC32CoreGraphicsOpContextGetTextPosition = 128,
+    LC32CoreGraphicsOpContextIsPathEmpty = 129,
+    LC32CoreGraphicsOpContextReplacePathWithStrokedPath = 130,
+    LC32CoreGraphicsOpPathGetBoundingBox = 131,
+    LC32CoreGraphicsOpPathGetPathBoundingBox = 132,
+    LC32CoreGraphicsOpPathIsEmpty = 133,
+    LC32CoreGraphicsOpLayerGetSize = 134,
+''')
+ header.write_text(h)
+
+g=guest.read_text()
+if 'CGPoint CGContextConvertPointToDeviceSpace(' not in g:
+ g += r'''
+CGPoint CGContextConvertPointToDeviceSpace(CGContextRef c,CGPoint p) { CGPoint r=CGPointZero;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextConvertPointToDeviceSpace,LC32_CG_HOST(c),LC32_CG_F32(p.x),LC32_CG_F32(p.y),LC32_CG_U32((uintptr_t)&r));return r; }
+CGPoint CGContextConvertPointToUserSpace(CGContextRef c,CGPoint p) { CGPoint r=CGPointZero;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextConvertPointToUserSpace,LC32_CG_HOST(c),LC32_CG_F32(p.x),LC32_CG_F32(p.y),LC32_CG_U32((uintptr_t)&r));return r; }
+CGRect CGContextConvertRectToDeviceSpace(CGContextRef c,CGRect v) { CGRect r=CGRectZero;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextConvertRectToDeviceSpace,LC32_CG_HOST(c),LC32_CG_F32(v.origin.x),LC32_CG_F32(v.origin.y),LC32_CG_F32(v.size.width),LC32_CG_F32(v.size.height),LC32_CG_U32((uintptr_t)&r));return r; }
+CGRect CGContextConvertRectToUserSpace(CGContextRef c,CGRect v) { CGRect r=CGRectZero;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextConvertRectToUserSpace,LC32_CG_HOST(c),LC32_CG_F32(v.origin.x),LC32_CG_F32(v.origin.y),LC32_CG_F32(v.size.width),LC32_CG_F32(v.size.height),LC32_CG_U32((uintptr_t)&r));return r; }
+CGAffineTransform CGContextGetCTM(CGContextRef c) { CGAffineTransform r=CGAffineTransformIdentity;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextGetCTM,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)&r));return r; }
+CGRect CGContextGetPathBoundingBox(CGContextRef c) { CGRect r=CGRectNull;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextGetPathBoundingBox,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)&r));return r; }
+CGPoint CGContextGetTextPosition(CGContextRef c) { CGPoint r=CGPointZero;if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextGetTextPosition,LC32_CG_HOST(c),LC32_CG_U32((uintptr_t)&r));return r; }
+bool CGContextIsPathEmpty(CGContextRef c) { return !c||LC32_CG_CALL(LC32CoreGraphicsOpContextIsPathEmpty,LC32_CG_HOST(c)); }
+void CGContextReplacePathWithStrokedPath(CGContextRef c) { if(c)(void)LC32_CG_CALL(LC32CoreGraphicsOpContextReplacePathWithStrokedPath,LC32_CG_HOST(c)); }
+CGRect CGPathGetBoundingBox(CGPathRef p) { CGRect r=CGRectNull;if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathGetBoundingBox,LC32_CG_HOST(p),LC32_CG_U32((uintptr_t)&r));return r; }
+CGRect CGPathGetPathBoundingBox(CGPathRef p) { CGRect r=CGRectNull;if(p)(void)LC32_CG_CALL(LC32CoreGraphicsOpPathGetPathBoundingBox,LC32_CG_HOST(p),LC32_CG_U32((uintptr_t)&r));return r; }
+bool CGPathIsEmpty(CGPathRef p) { return !p||LC32_CG_CALL(LC32CoreGraphicsOpPathIsEmpty,LC32_CG_HOST(p)); }
+CGSize CGLayerGetSize(CGLayerRef l) { CGSize r=CGSizeZero;if(l)(void)LC32_CG_CALL(LC32CoreGraphicsOpLayerGetSize,LC32_CG_HOST(l),LC32_CG_U32((uintptr_t)&r));return r; }
+'''
+ guest.write_text(g)
+
+x=host.read_text()
+if 'bool WriteGuestCoreGraphicsFloats(' not in x:
+ anchor='} // namespace\n\n__BEGIN_DECLS'
+ helper=r'''bool WriteGuestCoreGraphicsFloats(u32 address,const CGFloat *values,size_t count) {
+    if(!address||!values||count>16||static_cast<uint64_t>(address)+count*sizeof(float)>static_cast<uint64_t>(UINT32_MAX)+1)return false;
+    float output[16];for(size_t i=0;i<count;++i)output[i]=static_cast<float>(values[i]);
+    return Dynarmic_mem_1write(address,count*sizeof(float),reinterpret_cast<char *>(output))==0;
+}
+
+'''
+ if anchor not in x:raise SystemExit('namespace anchor missing')
+ x=x.replace(anchor,helper+anchor,1)
+if 'case LC32CoreGraphicsOpContextConvertPointToDeviceSpace:' not in x:
+ cases=r'''
+        case LC32CoreGraphicsOpContextConvertPointToDeviceSpace:
+        case LC32CoreGraphicsOpContextConvertPointToUserSpace: {
+            if(!RequireCoreGraphicsSlots(call,4))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGPoint p=CGPointMake(SlotCGFloat(call,1),SlotCGFloat(call,2));p=opcode==LC32CoreGraphicsOpContextConvertPointToDeviceSpace?CGContextConvertPointToDeviceSpace(c,p):CGContextConvertPointToUserSpace(c,p);
+            CGFloat v[2]={p.x,p.y};return WriteGuestCoreGraphicsFloats(SlotU32(call,3),v,2);
+        }
+        case LC32CoreGraphicsOpContextConvertRectToDeviceSpace:
+        case LC32CoreGraphicsOpContextConvertRectToUserSpace: {
+            if(!RequireCoreGraphicsSlots(call,6))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;
+            CGRect r=SlotRect(call,1);r=opcode==LC32CoreGraphicsOpContextConvertRectToDeviceSpace?CGContextConvertRectToDeviceSpace(c,r):CGContextConvertRectToUserSpace(c,r);
+            CGFloat v[4]={r.origin.x,r.origin.y,r.size.width,r.size.height};return WriteGuestCoreGraphicsFloats(SlotU32(call,5),v,4);
+        }
+        case LC32CoreGraphicsOpContextGetCTM: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;CGAffineTransform t=CGContextGetCTM(c);
+            CGFloat v[6]={t.a,t.b,t.c,t.d,t.tx,t.ty};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),v,6);
+        }
+        case LC32CoreGraphicsOpContextGetPathBoundingBox:
+        case LC32CoreGraphicsOpPathGetBoundingBox:
+        case LC32CoreGraphicsOpPathGetPathBoundingBox: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGRect r;
+            if(opcode==LC32CoreGraphicsOpContextGetPathBoundingBox){CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;r=CGContextGetPathBoundingBox(c);}else{CGPathRef p=SlotHostObject<CGPathRef>(call,0);if(!p)return 0;r=opcode==LC32CoreGraphicsOpPathGetBoundingBox?CGPathGetBoundingBox(p):CGPathGetPathBoundingBox(p);}
+            CGFloat v[4]={r.origin.x,r.origin.y,r.size.width,r.size.height};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),v,4);
+        }
+        case LC32CoreGraphicsOpContextGetTextPosition: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;CGPoint p=CGContextGetTextPosition(c);CGFloat v[2]={p.x,p.y};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),v,2);
+        }
+        case LC32CoreGraphicsOpContextIsPathEmpty:
+        case LC32CoreGraphicsOpPathIsEmpty: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;if(opcode==LC32CoreGraphicsOpContextIsPathEmpty){CGContextRef c=SlotHostObject<CGContextRef>(call,0);return !c||CGContextIsPathEmpty(c);}CGPathRef p=SlotHostObject<CGPathRef>(call,0);return !p||CGPathIsEmpty(p);
+        }
+        case LC32CoreGraphicsOpContextReplacePathWithStrokedPath: {
+            if(!RequireCoreGraphicsSlots(call,1))return 0;CGContextRef c=SlotHostObject<CGContextRef>(call,0);if(!c)return 0;CGContextReplacePathWithStrokedPath(c);return 1;
+        }
+        case LC32CoreGraphicsOpLayerGetSize: {
+            if(!RequireCoreGraphicsSlots(call,2))return 0;CGLayerRef l=SlotHostObject<CGLayerRef>(call,0);if(!l)return 0;CGSize z=CGLayerGetSize(l);CGFloat v[2]={z.width,z.height};return WriteGuestCoreGraphicsFloats(SlotU32(call,1),v,2);
+        }
+'''
+ anchor='    }\n    return 0;\n}\n\n__END_DECLS'
+ if anchor not in x:raise SystemExit('third switch anchor missing')
+ x=x.replace(anchor,cases+'    }\n    return 0;\n}\n\n__END_DECLS',1)
+ host.write_text(x)
+print('CoreGraphics: added 13 typed geometry query exports')
