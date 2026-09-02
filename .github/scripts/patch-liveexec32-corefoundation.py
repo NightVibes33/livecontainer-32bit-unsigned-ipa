@@ -43,7 +43,7 @@ utilities_source = utilities_path.read_text()
 utilities_anchor = "CFNotificationCenterRef CFNotificationCenterGetLocalCenter(void) {"
 if utilities_source.count(utilities_anchor) != 1:
     raise SystemExit("expected one CoreFoundation utilities anchor")
-utilities_extra = r"""CFLocaleRef CFLocaleCreateCanonicalLanguageIdentifierFromString(
+utilities_extra = r"""CFLocaleIdentifier CFLocaleCreateCanonicalLanguageIdentifierFromString(
         CFAllocatorRef allocator, CFStringRef localeIdentifier) {
     (void)allocator;
     if(!localeIdentifier) return NULL;
