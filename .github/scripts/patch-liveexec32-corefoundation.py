@@ -335,3 +335,79 @@ constants_source = path.read_text()
 if "@interface LC32CFBinaryHeap" in constants_source:
     raise SystemExit("CoreFoundation binary heap patch already applied")
 path.write_text(constants_source + heap_extra)
+stream_path = Path("build/LiveExec32/GuestFrameworks/CoreFoundation/CFStream.m")
+stream_source = stream_path.read_text()
+stream_anchor = "void CFStreamCreatePairWithSocket(CFAllocatorRef allocator,"
+if stream_source.count(stream_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation stream creation anchor")
+stream_extra = r"""CFReadStreamRef CFReadStreamCreateWithFile(CFAllocatorRef allocator,
+                                               CFURLRef fileURL) {
+    (void)allocator;
+    if(!fileURL) return NULL;
+    return (CFReadStreamRef)[[NSInputStream alloc]
+        initWithURL:(NSURL *)fileURL];
+}
+
+CFWriteStreamRef CFWriteStreamCreateWithFile(CFAllocatorRef allocator,
+                                              CFURLRef fileURL) {
+    (void)allocator;
+    if(!fileURL || ![(NSURL *)fileURL isFileURL]) return NULL;
+    return (CFWriteStreamRef)[[NSOutputStream alloc]
+        initToFileAtPath:[(NSURL *)fileURL path] append:NO];
+}
+
+"""
+stream_path.write_text(stream_source.replace(stream_anchor, stream_extra + stream_anchor))
+
+url_source = utilities_path.read_text()
+url_anchor = "CFStringRef CFURLCreateStringByReplacingPercentEscapes("
+if url_source.count(url_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation URL compatibility anchor")
+url_extra = r"""Boolean CFURLCreateDataAndPropertiesFromResource(
+        CFAllocatorRef allocator, CFURLRef url, CFDataRef *resourceData,
+        CFDictionaryRef *properties, CFArrayRef desiredProperties,
+        SInt32 *errorCode) {
+    (void)allocator;
+    if(resourceData) *resourceData = NULL;
+    if(properties) *properties = NULL;
+    if(errorCode) *errorCode = 0;
+    if(!url) {
+        if(errorCode) *errorCode = kCFURLImproperArgumentsError;
+        return false;
+    }
+    NSData *data = [NSData dataWithContentsOfURL:(NSURL *)url];
+    if(!data) {
+        if(errorCode) *errorCode = kCFURLResourceNotFoundError;
+        return false;
+    }
+    if(resourceData) *resourceData = (CFDataRef)[data copy];
+    if(properties) {
+        NSDictionary *values = desiredProperties
+            ? [(NSURL *)url resourceValuesForKeys:(NSArray *)desiredProperties
+                                            error:nil]
+            : @{};
+        *properties = (CFDictionaryRef)[(values ?: @{}) copy];
+    }
+    return true;
+}
+
+CFURLRef _CFBundleCopyBundleURLForExecutableURL(CFURLRef executableURL) {
+    if(!executableURL || ![(NSURL *)executableURL isFileURL]) return NULL;
+    NSString *executablePath = [[(NSURL *)executableURL path]
+        stringByStandardizingPath];
+    NSString *candidate = [executablePath stringByDeletingLastPathComponent];
+    while([candidate length] > 1) {
+        NSBundle *bundle = [NSBundle bundleWithPath:candidate];
+        NSString *bundleExecutable = [[bundle executablePath]
+            stringByStandardizingPath];
+        if(bundle && [bundleExecutable isEqualToString:executablePath])
+            return (CFURLRef)[[bundle bundleURL] copy];
+        NSString *parent = [candidate stringByDeletingLastPathComponent];
+        if([parent isEqualToString:candidate]) break;
+        candidate = parent;
+    }
+    return NULL;
+}
+
+"""
+utilities_path.write_text(url_source.replace(url_anchor, url_extra + url_anchor))
