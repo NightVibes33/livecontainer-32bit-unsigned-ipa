@@ -4,6 +4,12 @@ from pathlib import Path
 
 root = Path("build/LiveExec32/GuestFrameworks")
 constants = {
+    'AddressBook': [
+        ('kABGroupNameProperty', 'string'),
+        ('kABPersonCreationDateProperty', 'string'),
+        ('kABPersonDateProperty', 'string'),
+        ('kABPersonModificationDateProperty', 'string'),
+    ],
     'AVFoundation': [
         ('AVAssetExportPreset1280x720', 'string'),
         ('AVAssetExportPreset1920x1080', 'string'),
@@ -483,6 +489,11 @@ constants = {
         ('SKStoreProductParameterProviderToken', 'string'),
     ],
     'UIKit': [
+        ('NSAttachmentAttributeName', 'string'),
+        ('NSBackgroundColorAttributeName', 'string'),
+        ('NSFontAttributeName', 'string'),
+        ('NSForegroundColorAttributeName', 'string'),
+        ('NSShadowAttributeName', 'string'),
         ('UIAccessibilityVoiceOverStatusChanged', 'string'),
         ('UIApplicationOpenSettingsURLString', 'string'),
         ('UIApplicationStatusBarFrameUserInfoKey', 'string'),
