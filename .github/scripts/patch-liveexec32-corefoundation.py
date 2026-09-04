@@ -527,3 +527,105 @@ CFHashCode CFStringHashNSString(CFStringRef string) {
 
 """
 hash_path.write_text(hash_source.replace(hash_anchor, hash_extra + hash_anchor))
+cf_header_path = Path("build/LiveExec32/GuestFrameworks/CoreFoundation/LC32CoreFoundationBridge.h")
+cf_header_source = cf_header_path.read_text()
+cf_header_anchor = "    LC32CoreFoundationOpDateFormatterGetAbsoluteTimeFromString = 224,"
+if cf_header_source.count(cf_header_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation opcode anchor")
+cf_header_insert = cf_header_anchor + r"""
+    LC32CoreFoundationOpPreferencesCopyKeyList = 225,
+    LC32CoreFoundationOpPreferencesSetMultiple = 226,
+    LC32CoreFoundationOpPreferencesSetValue = 227,
+    LC32CoreFoundationOpPreferencesSynchronize = 228,"""
+cf_header_path.write_text(cf_header_source.replace(cf_header_anchor, cf_header_insert))
+
+prefs_path = Path("build/LiveExec32/GuestFrameworks/CoreFoundation/CFPreferences.m")
+prefs_source = prefs_path.read_text()
+if "CFArrayRef CFPreferencesCopyKeyList(" in prefs_source:
+    raise SystemExit("CoreFoundation preferences patch already applied")
+prefs_extra = r"""
+
+CFArrayRef CFPreferencesCopyKeyList(CFStringRef applicationID,
+        CFStringRef userName, CFStringRef hostName) {
+    if(!applicationID || !userName || !hostName) return NULL;
+    return (CFArrayRef)LC32_CF_CALL(
+        LC32CoreFoundationOpPreferencesCopyKeyList,
+        LC32_CF_HOST(applicationID), LC32_CF_HOST(userName),
+        LC32_CF_HOST(hostName));
+}
+
+void CFPreferencesSetMultiple(CFDictionaryRef keysToSet,
+        CFArrayRef keysToRemove, CFStringRef applicationID,
+        CFStringRef userName, CFStringRef hostName) {
+    if(!applicationID || !userName || !hostName) return;
+    LC32_CF_CALL(LC32CoreFoundationOpPreferencesSetMultiple,
+        LC32_CF_HOST(keysToSet), LC32_CF_HOST(keysToRemove),
+        LC32_CF_HOST(applicationID), LC32_CF_HOST(userName),
+        LC32_CF_HOST(hostName));
+}
+
+void CFPreferencesSetValue(CFStringRef key, CFPropertyListRef value,
+        CFStringRef applicationID, CFStringRef userName,
+        CFStringRef hostName) {
+    if(!key || !applicationID || !userName || !hostName) return;
+    LC32_CF_CALL(LC32CoreFoundationOpPreferencesSetValue,
+        LC32_CF_HOST(key), LC32_CF_HOST(value),
+        LC32_CF_HOST(applicationID), LC32_CF_HOST(userName),
+        LC32_CF_HOST(hostName));
+}
+
+Boolean CFPreferencesSynchronize(CFStringRef applicationID,
+        CFStringRef userName, CFStringRef hostName) {
+    return applicationID && userName && hostName && LC32_CF_CALL(
+        LC32CoreFoundationOpPreferencesSynchronize,
+        LC32_CF_HOST(applicationID), LC32_CF_HOST(userName),
+        LC32_CF_HOST(hostName));
+}
+"""
+prefs_path.write_text(prefs_source + prefs_extra)
+
+host_cf_path = Path("build/LiveExec32/HostFrameworks/CoreFoundation/CoreFoundation.mm")
+host_cf_source = host_cf_path.read_text()
+host_cf_anchor = "        case LC32CoreFoundationOpPropertyListCreateWithData: {"
+if host_cf_source.count(host_cf_anchor) != 1:
+    raise SystemExit("expected one host CoreFoundation preferences anchor")
+host_cf_extra = r"""        case LC32CoreFoundationOpPreferencesCopyKeyList: {
+            if(!RequireSlots(call, 3)) return 0;
+            CFStringRef app = SlotHostObject<CFStringRef>(call, 0);
+            CFStringRef user = SlotHostObject<CFStringRef>(call, 1);
+            CFStringRef host = SlotHostObject<CFStringRef>(call, 2);
+            return app && user && host ? GuestForCreatedObject(
+                CFPreferencesCopyKeyList(app, user, host)) : 0;
+        }
+        case LC32CoreFoundationOpPreferencesSetMultiple: {
+            if(!RequireSlots(call, 5)) return 0;
+            CFStringRef app = SlotHostObject<CFStringRef>(call, 2);
+            CFStringRef user = SlotHostObject<CFStringRef>(call, 3);
+            CFStringRef host = SlotHostObject<CFStringRef>(call, 4);
+            if(!app || !user || !host) return 0;
+            CFPreferencesSetMultiple(
+                SlotHostObject<CFDictionaryRef>(call, 0),
+                SlotHostObject<CFArrayRef>(call, 1), app, user, host);
+            return 1;
+        }
+        case LC32CoreFoundationOpPreferencesSetValue: {
+            if(!RequireSlots(call, 5)) return 0;
+            CFStringRef key = SlotHostObject<CFStringRef>(call, 0);
+            CFStringRef app = SlotHostObject<CFStringRef>(call, 2);
+            CFStringRef user = SlotHostObject<CFStringRef>(call, 3);
+            CFStringRef host = SlotHostObject<CFStringRef>(call, 4);
+            if(!key || !app || !user || !host) return 0;
+            CFPreferencesSetValue(key,
+                SlotHostObject<CFPropertyListRef>(call, 1), app, user, host);
+            return 1;
+        }
+        case LC32CoreFoundationOpPreferencesSynchronize: {
+            if(!RequireSlots(call, 3)) return 0;
+            CFStringRef app = SlotHostObject<CFStringRef>(call, 0);
+            CFStringRef user = SlotHostObject<CFStringRef>(call, 1);
+            CFStringRef host = SlotHostObject<CFStringRef>(call, 2);
+            return app && user && host &&
+                CFPreferencesSynchronize(app, user, host);
+        }
+"""
+host_cf_path.write_text(host_cf_source.replace(host_cf_anchor, host_cf_extra + host_cf_anchor))
