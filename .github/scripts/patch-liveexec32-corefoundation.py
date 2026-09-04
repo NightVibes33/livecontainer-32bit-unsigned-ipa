@@ -35,6 +35,8 @@ NSString * const NSISO8601Calendar = @"iso8601";
 NSString * const NSURLUbiquitousItemDownloadingStatusKey = @"NSURLUbiquitousItemDownloadingStatusKey";
 const CFLocaleKey kCFLocaleCalendarIdentifier = CFSTR("calendar");
 const CFStreamPropertyKey kCFStreamPropertyAppendToFile = CFSTR("kCFStreamPropertyAppendToFile");
+const int kCFStreamErrorDomainSSL = 3;
+const int kCFStreamErrorDomainSOCKS = 5;
 
 """
 path.write_text(source.replace(anchor, locale_constants + calendar_constants + anchor))
@@ -501,3 +503,27 @@ CFStringRef CMTimeCopyDescription(CFAllocatorRef allocator, CMTime time) {
 }
 """
 coremedia_path.write_text(coremedia_source + coremedia_extra)
+hash_path = Path("build/LiveExec32/GuestFrameworks/CoreFoundation/CFType.m")
+hash_source = hash_path.read_text()
+hash_anchor = "CFHashCode CFHash(CFTypeRef object) {"
+if hash_source.count(hash_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation hash anchor")
+hash_extra = r"""CFHashCode CFHashBytes(uint8_t *bytes, CFIndex length) {
+    if(length < 0 || (length && !bytes)) return 0;
+    uint32_t hash = 0, first, high;
+    for(CFIndex index = 0; index < length; index++) {
+        first = (hash << 4) + bytes[index];
+        high = first & 0xF0000000U;
+        if(high) first ^= high >> 24;
+        first &= ~high;
+        hash = first;
+    }
+    return (CFHashCode)hash;
+}
+
+CFHashCode CFStringHashNSString(CFStringRef string) {
+    return string ? (CFHashCode)[(NSString *)string hash] : 0;
+}
+
+"""
+hash_path.write_text(hash_source.replace(hash_anchor, hash_extra + hash_anchor))
