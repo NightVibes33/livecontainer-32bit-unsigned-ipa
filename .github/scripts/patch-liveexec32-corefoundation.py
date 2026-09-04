@@ -629,3 +629,86 @@ host_cf_extra = r"""        case LC32CoreFoundationOpPreferencesCopyKeyList: {
         }
 """
 host_cf_path.write_text(host_cf_source.replace(host_cf_anchor, host_cf_extra + host_cf_anchor))
+string_header_source = cf_header_path.read_text()
+string_header_anchor = "    LC32CoreFoundationOpStringGetFileSystemRepresentation = 120,"
+if string_header_source.count(string_header_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation string opcode anchor")
+string_header_insert = string_header_anchor + r"""
+    LC32CoreFoundationOpStringCompareWithOptionsAndLocale = 121,
+    LC32CoreFoundationOpStringTransform = 122,"""
+cf_header_path.write_text(string_header_source.replace(string_header_anchor, string_header_insert))
+
+string_source = string_path.read_text()
+string_bridge_anchor = "Boolean CFStringHasPrefix(CFStringRef string, CFStringRef prefix) {"
+if string_source.count(string_bridge_anchor) != 1:
+    raise SystemExit("expected one CoreFoundation string bridge anchor")
+string_bridge_extra = r"""CFComparisonResult CFStringCompareWithOptionsAndLocale(
+        CFStringRef first, CFStringRef second, CFRange range,
+        CFStringCompareFlags options, CFLocaleRef locale) {
+    if(!first || !second || !LC32CFStringValidRange(range))
+        return kCFCompareEqualTo;
+    return (CFComparisonResult)(int32_t)LC32_CF_CALL(
+        LC32CoreFoundationOpStringCompareWithOptionsAndLocale,
+        LC32_CF_HOST(first), LC32_CF_HOST(second),
+        LC32_CF_U32(range.location), LC32_CF_U32(range.length),
+        LC32_CF_U32(options), LC32_CF_HOST(locale));
+}
+
+Boolean CFStringTransform(CFMutableStringRef string, CFRange *range,
+                          CFStringRef transform, Boolean reverse) {
+    if(!string || !transform || (range && !LC32CFStringValidRange(*range)))
+        return false;
+    return LC32_CF_CALL(LC32CoreFoundationOpStringTransform,
+        LC32_CF_HOST(string), LC32_CF_U32((uintptr_t)range),
+        LC32_CF_HOST(transform), LC32_CF_U32(reverse != false)) != 0;
+}
+
+"""
+string_path.write_text(string_source.replace(string_bridge_anchor, string_bridge_extra + string_bridge_anchor))
+
+host_string_source = host_cf_path.read_text()
+host_string_anchor = "        case LC32CoreFoundationOpDateCreate: {"
+if host_string_source.count(host_string_anchor) != 1:
+    raise SystemExit("expected one host CoreFoundation string dispatch anchor")
+host_string_extra = r"""        case LC32CoreFoundationOpStringCompareWithOptionsAndLocale: {
+            if(!RequireSlots(call, 6)) return 0;
+            CFStringRef first = SlotHostObject<CFStringRef>(call, 0);
+            CFStringRef second = SlotHostObject<CFStringRef>(call, 1);
+            CFLocaleRef locale = SlotHostObject<CFLocaleRef>(call, 5);
+            if(!first || !second) return 0;
+            CFRange range = { SlotS32(call, 2), SlotS32(call, 3) };
+            return static_cast<u32>(static_cast<int32_t>(
+                CFStringCompareWithOptionsAndLocale(first, second, range,
+                    SlotU32(call, 4), locale)));
+        }
+        case LC32CoreFoundationOpStringTransform: {
+            if(!RequireSlots(call, 4)) return 0;
+            CFMutableStringRef string =
+                SlotHostObject<CFMutableStringRef>(call, 0);
+            CFStringRef transform = SlotHostObject<CFStringRef>(call, 2);
+            if(!string || !transform) return 0;
+            const u32 guestRange = SlotU32(call, 1);
+            CFRange range = {};
+            CFRange *rangePointer = nullptr;
+            if(guestRange) {
+                struct { int32_t location; int32_t length; } guest = {};
+                if(Dynarmic_mem_1read(guestRange, sizeof(guest),
+                    reinterpret_cast<char *>(&guest)) != 0 ||
+                   guest.location < 0 || guest.length < 0) return 0;
+                range = CFRangeMake(guest.location, guest.length);
+                rangePointer = &range;
+            }
+            const Boolean result = CFStringTransform(string, rangePointer,
+                transform, SlotU32(call, 3) != 0);
+            if(guestRange && result) {
+                struct { int32_t location; int32_t length; } guest = {
+                    static_cast<int32_t>(range.location),
+                    static_cast<int32_t>(range.length) };
+                if(range.location > INT32_MAX || range.length > INT32_MAX ||
+                   Dynarmic_mem_1write(guestRange, sizeof(guest),
+                    reinterpret_cast<char *>(&guest)) != 0) return 0;
+            }
+            return result != false;
+        }
+"""
+host_cf_path.write_text(host_string_source.replace(host_string_anchor, host_string_extra + host_string_anchor))
