@@ -83,3 +83,99 @@ CFStringRef CFStringGetNameOfEncoding(CFStringEncoding encoding) {
 
 """
 string_path.write_text(string_source.replace(string_anchor, string_extra + string_anchor))
+allocator_extra = r"""
+
+#include <string.h>
+
+@interface LC32CFGuestAllocator : NSObject {
+@public
+    CFAllocatorContext _context;
+}
+@end
+
+@implementation LC32CFGuestAllocator
+- (void)dealloc {
+    if(_context.release && _context.info) _context.release(_context.info);
+    [super dealloc];
+}
+@end
+
+static __thread CFAllocatorRef LC32ThreadDefaultAllocator;
+
+static LC32CFGuestAllocator *LC32CustomAllocator(CFAllocatorRef allocator) {
+    if(!allocator || allocator == kCFAllocatorSystemDefault ||
+       allocator == kCFAllocatorMalloc ||
+       allocator == kCFAllocatorMallocZone ||
+       allocator == kCFAllocatorNull) return nil;
+    return [(id)allocator isKindOfClass:[LC32CFGuestAllocator class]]
+        ? (LC32CFGuestAllocator *)allocator : nil;
+}
+
+CFAllocatorRef CFAllocatorCreate(CFAllocatorRef allocator,
+                                 const CFAllocatorContext *context) {
+    (void)allocator;
+    if(!context || context->version != 0) return NULL;
+    LC32CFGuestAllocator *result = [LC32CFGuestAllocator new];
+    result->_context = *context;
+    if(result->_context.retain && result->_context.info)
+        result->_context.info = (void *)result->_context.retain(result->_context.info);
+    return (CFAllocatorRef)result;
+}
+
+CFAllocatorRef CFAllocatorGetDefault(void) {
+    return LC32ThreadDefaultAllocator ?: kCFAllocatorSystemDefault;
+}
+
+void CFAllocatorSetDefault(CFAllocatorRef allocator) {
+    CFAllocatorRef replacement = allocator ?: kCFAllocatorSystemDefault;
+    if(replacement == LC32ThreadDefaultAllocator) return;
+    if(LC32CustomAllocator(replacement)) CFRetain(replacement);
+    CFAllocatorRef previous = LC32ThreadDefaultAllocator;
+    LC32ThreadDefaultAllocator = replacement;
+    if(LC32CustomAllocator(previous)) CFRelease(previous);
+}
+
+void CFAllocatorGetContext(CFAllocatorRef allocator,
+                           CFAllocatorContext *context) {
+    if(!context) return;
+    LC32CFGuestAllocator *custom = LC32CustomAllocator(allocator);
+    if(custom) *context = custom->_context;
+    else memset(context, 0, sizeof(*context));
+}
+
+void *CFAllocatorAllocate(CFAllocatorRef allocator, CFIndex size,
+                          CFOptionFlags hint) {
+    if(size < 0) return NULL;
+    CFAllocatorRef selected = allocator ?: CFAllocatorGetDefault();
+    if(selected == kCFAllocatorNull) return NULL;
+    LC32CFGuestAllocator *custom = LC32CustomAllocator(selected);
+    if(custom && custom->_context.allocate)
+        return custom->_context.allocate(size, hint, custom->_context.info);
+    return malloc((size_t)size);
+}
+
+void *CFAllocatorReallocate(CFAllocatorRef allocator, void *pointer,
+                            CFIndex size, CFOptionFlags hint) {
+    if(size < 0) return NULL;
+    CFAllocatorRef selected = allocator ?: CFAllocatorGetDefault();
+    if(selected == kCFAllocatorNull) return NULL;
+    LC32CFGuestAllocator *custom = LC32CustomAllocator(selected);
+    if(custom && custom->_context.reallocate)
+        return custom->_context.reallocate(pointer, size, hint, custom->_context.info);
+    return realloc(pointer, (size_t)size);
+}
+
+void CFAllocatorDeallocate(CFAllocatorRef allocator, void *pointer) {
+    if(!pointer) return;
+    CFAllocatorRef selected = allocator ?: CFAllocatorGetDefault();
+    if(selected == kCFAllocatorNull) return;
+    LC32CFGuestAllocator *custom = LC32CustomAllocator(selected);
+    if(custom && custom->_context.deallocate)
+        custom->_context.deallocate(pointer, custom->_context.info);
+    else free(pointer);
+}
+"""
+constants_source = path.read_text()
+if "@interface LC32CFGuestAllocator" in constants_source:
+    raise SystemExit("CoreFoundation allocator patch already applied")
+path.write_text(constants_source + allocator_extra)
