@@ -112,7 +112,7 @@ static LC32CFGuestAllocator *LC32CustomAllocator(CFAllocatorRef allocator) {
 }
 
 CFAllocatorRef CFAllocatorCreate(CFAllocatorRef allocator,
-                                 const CFAllocatorContext *context) {
+                                 CFAllocatorContext *context) {
     (void)allocator;
     if(!context || context->version != 0) return NULL;
     LC32CFGuestAllocator *result = [LC32CFGuestAllocator new];
