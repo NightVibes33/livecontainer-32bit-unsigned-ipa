@@ -411,3 +411,93 @@ CFURLRef _CFBundleCopyBundleURLForExecutableURL(CFURLRef executableURL) {
 
 """
 utilities_path.write_text(url_source.replace(url_anchor, url_extra + url_anchor))
+coremedia_path = Path("build/LiveExec32/GuestFrameworks/CoreMedia/CoreMedia.m")
+coremedia_source = coremedia_path.read_text()
+if "CMTime CMTimeAdd(CMTime left, CMTime right)" in coremedia_source:
+    raise SystemExit("CoreMedia arithmetic patch already applied")
+coremedia_extra = r"""
+CMTime CMTimeMultiplyByFloat64(CMTime time, Float64 multiplier);
+
+CMTime CMTimeAdd(CMTime left, CMTime right) {
+    return LC32CMTimeAdd(left, right);
+}
+
+CMTime CMTimeSubtract(CMTime left, CMTime right) {
+    if(CMTIME_IS_POSITIVE_INFINITY(right)) right = kCMTimeNegativeInfinity;
+    else if(CMTIME_IS_NEGATIVE_INFINITY(right)) right = kCMTimePositiveInfinity;
+    else if(CMTIME_IS_NUMERIC(right)) {
+        if(right.value == INT64_MIN) right = CMTimeMultiplyByFloat64(right, -1.0);
+        else right.value = -right.value;
+    }
+    return LC32CMTimeAdd(left, right);
+}
+
+int32_t CMTimeCompare(CMTime left, CMTime right) {
+    return LC32CMTimeCompare(left, right);
+}
+
+CMTime CMTimeMakeWithSeconds(Float64 seconds, int32_t preferredTimescale) {
+    if(preferredTimescale <= 0 || isnan(seconds)) return kCMTimeInvalid;
+    if(isinf(seconds)) return seconds < 0
+        ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    const long double scaled = (long double)seconds * preferredTimescale;
+    if(scaled < INT64_MIN || scaled > INT64_MAX) return scaled < 0
+        ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    const int64_t value = (int64_t)(scaled < 0 ? scaled - 0.5L : scaled + 0.5L);
+    CMTime result = CMTimeMake(value, preferredTimescale);
+    if((long double)value != scaled) result.flags |= kCMTimeFlags_HasBeenRounded;
+    return result;
+}
+
+CMTime CMTimeMultiply(CMTime time, int32_t multiplier) {
+    if(!CMTIME_IS_VALID(time) || CMTIME_IS_INDEFINITE(time)) return time;
+    if(multiplier == 0 && !CMTIME_IS_NUMERIC(time)) return kCMTimeInvalid;
+    if(CMTIME_IS_POSITIVE_INFINITY(time)) return multiplier < 0
+        ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    if(CMTIME_IS_NEGATIVE_INFINITY(time)) return multiplier < 0
+        ? kCMTimePositiveInfinity : kCMTimeNegativeInfinity;
+    int64_t product = 0;
+    if(!__builtin_mul_overflow(time.value, (int64_t)multiplier, &product)) {
+        time.value = product;
+        return time;
+    }
+    return CMTimeMultiplyByFloat64(time, (Float64)multiplier);
+}
+
+CMTime CMTimeMultiplyByFloat64(CMTime time, Float64 multiplier) {
+    if(!CMTIME_IS_VALID(time) || isnan(multiplier)) return kCMTimeInvalid;
+    if(CMTIME_IS_INDEFINITE(time)) return time;
+    if(multiplier == 0 && !CMTIME_IS_NUMERIC(time)) return kCMTimeInvalid;
+    if(!CMTIME_IS_NUMERIC(time)) {
+        const Boolean negative = (CMTIME_IS_NEGATIVE_INFINITY(time) !=
+                                  (multiplier < 0));
+        return negative ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    }
+    if(isinf(multiplier)) {
+        if(time.value == 0) return kCMTimeInvalid;
+        const Boolean negative = ((time.value < 0) != (multiplier < 0));
+        return negative ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    }
+    const long double scaled = (long double)time.value * multiplier;
+    if(scaled < INT64_MIN || scaled > INT64_MAX) return scaled < 0
+        ? kCMTimeNegativeInfinity : kCMTimePositiveInfinity;
+    time.value = (int64_t)(scaled < 0 ? scaled - 0.5L : scaled + 0.5L);
+    time.flags |= kCMTimeFlags_HasBeenRounded;
+    return time;
+}
+
+CMTimeRange CMTimeRangeMake(CMTime start, CMTime duration) {
+    const CMTimeRange result = { start, duration };
+    return result;
+}
+
+CFStringRef CMTimeCopyDescription(CFAllocatorRef allocator, CMTime time) {
+    (void)allocator;
+    NSString *description = [NSString stringWithFormat:
+        @"{value=%lld, timescale=%d, flags=0x%x, epoch=%lld}",
+        (long long)time.value, (int)time.timescale, (unsigned)time.flags,
+        (long long)time.epoch];
+    return (CFStringRef)[description copy];
+}
+"""
+coremedia_path.write_text(coremedia_source + coremedia_extra)
