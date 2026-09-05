@@ -621,5 +621,5 @@ for framework, entries in constants.items():
     source += "\n".join(initializers) + "\n}\n"
     (directory / "LC32CorpusObjectConstants.m").write_text(source)
     print(f"{framework}: {len(entries)} host-backed object constants")
-glkit = root / "GLKit/GLKit.m"
-glkit.write_text(glkit.read_text() + "\nconst GLKMatrix4 GLKMatrix4Identity = {{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};\n")
+glkit = root / "GLKit/LC32MatrixConstants.m"
+glkit.write_text("#import <GLKit/GLKit.h>\nconst GLKMatrix4 GLKMatrix4Identity = {{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1}};\n")
