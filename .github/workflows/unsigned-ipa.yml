@@ -236,7 +236,7 @@ jobs:
             .github/tests/accelerate-behavior.c \
             -framework Accelerate -framework Foundation -o build/accelerate-behavior
           build/accelerate-behavior
-          xcrun clang -fmodules -O2 build/LiveExec32/GuestFrameworks/CoreVideo/CoreVideo.m build/corevideo-behavior.m -framework CoreVideo -framework Foundation -o build/corevideo-behavior
+          xcrun clang -fmodules -O2 -DLC32_COREVIDEO_BEHAVIOR_TEST build/LiveExec32/GuestFrameworks/CoreVideo/CoreVideo.m build/corevideo-behavior.m -framework CoreVideo -framework Foundation -o build/corevideo-behavior
           build/corevideo-behavior
 
           gmake -C build/LiveExec32/GuestMakefile generate-shims
