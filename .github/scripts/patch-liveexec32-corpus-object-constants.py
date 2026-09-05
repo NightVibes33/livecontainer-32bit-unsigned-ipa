@@ -568,8 +568,8 @@ constants = {
 
 flat = [(framework, symbol) for framework, entries in constants.items()
         for symbol, _ in entries]
-if len(flat) != 491 or len(set(flat)) != len(flat):
-    raise SystemExit("corpus object-constant manifest must contain 491 unique exports")
+if len(flat) != 500 or len(set(flat)) != len(flat):
+    raise SystemExit("corpus object-constant manifest must contain 500 unique exports")
 
 source_header = r'''#import <Foundation/Foundation.h>
 #import <Foundation/Foundation+LC32.h>
