@@ -488,6 +488,13 @@ constants = {
         ('SKStoreProductParameterCampaignToken', 'string'),
         ('SKStoreProductParameterProviderToken', 'string'),
     ],
+    'SystemConfiguration': [
+        ('kSCEntNetVPN', 'string'),
+        ('kSCPropNetVPNAuthName', 'string'),
+        ('kSCPropNetVPNAuthPassword', 'string'),
+        ('kVPNConfigurationKeyCertificateRef', 'string'),
+        ('kVPNConfigurationKeyPersistentRef', 'string'),
+    ],
     'UIKit': [
         ('NSAttachmentAttributeName', 'string'),
         ('NSBackgroundColorAttributeName', 'string'),
@@ -568,8 +575,8 @@ constants = {
 
 flat = [(framework, symbol) for framework, entries in constants.items()
         for symbol, _ in entries]
-if len(flat) != 500 or len(set(flat)) != len(flat):
-    raise SystemExit("corpus object-constant manifest must contain 500 unique exports")
+if len(flat) != 505 or len(set(flat)) != len(flat):
+    raise SystemExit("corpus object-constant manifest must contain 505 unique exports")
 
 source_header = r'''#import <Foundation/Foundation.h>
 #import <Foundation/Foundation+LC32.h>
