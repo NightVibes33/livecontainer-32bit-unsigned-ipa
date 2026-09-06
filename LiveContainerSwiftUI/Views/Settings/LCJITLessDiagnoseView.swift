@@ -230,10 +230,12 @@ struct LCJITLessDiagnoseView : View {
                     } label: {
                         Text("LiveContainer Entitlements".loc)
                     }
-                    NavigationLink {
-                        LCEntitlementView(isLiveProcess: true)
-                    } label: {
-                        Text("LiveProcess Entitlements".loc)
+                    if sharedModel.multiLCStatus == 0 {
+                        NavigationLink {
+                            LCEntitlementView(isLiveProcess: true)
+                        } label: {
+                            Text("LiveProcess Entitlements".loc)
+                        }
                     }
                 }
                     
