@@ -61,7 +61,7 @@ CGPoint CGPointFromString(NSString *string) {
 
 corevideo = ROOT / "GuestFrameworks/CoreVideo"
 corevideo.mkdir(parents=True, exist_ok=True)
-(corevideo / "CoreVideo.m").write_text("""#import <CoreVideo/CoreVideo.h>\n#import <Foundation/Foundation.h>\n#import <OpenGLES/ES2/gl.h>\n#include <stdint.h>\n#include <stdlib.h>
+(corevideo / "CoreVideo.m").write_text("""#import <CoreVideo/CoreVideo.h>\n#import <Foundation/Foundation.h>\n#ifndef LC32_COREVIDEO_BEHAVIOR_TEST\n#import <OpenGLES/ES2/gl.h>\n#endif\n#include <stdint.h>\n#include <stdlib.h>
 const CFStringRef kCVPixelBufferPixelFormatTypeKey = CFSTR("PixelFormatType");
 const CFStringRef kCVPixelBufferBytesPerRowAlignmentKey = CFSTR("BytesPerRowAlignment");
 const CFStringRef kCVPixelBufferHeightKey = CFSTR("Height");
