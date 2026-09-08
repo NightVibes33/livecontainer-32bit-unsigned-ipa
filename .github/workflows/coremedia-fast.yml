@@ -1,0 +1,49 @@
+name: Fast CoreMedia ABI and behavior
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/patch-liveexec32-focus-graphics.py'
+      - '.github/scripts/patch-liveexec32-coremedia.py'
+      - '.github/tests/coremedia-blockbuffer-behavior.m'
+      - '.github/workflows/coremedia-fast.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coremedia:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          repository: LiveContainer/LiveExec32
+          ref: 3d8760320d981f16aa4b00dd77917b447ac5b774
+          path: build/LiveExec32
+          submodules: false
+          persist-credentials: false
+      - name: Patch and execute host behavior tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 .github/scripts/patch-liveexec32-focus-graphics.py
+          python3 .github/scripts/patch-liveexec32-coremedia.py
+          xcrun clang -fmodules -O2 -DLC32_COREVIDEO_BEHAVIOR_TEST \
+            build/LiveExec32/GuestFrameworks/CoreVideo/CoreVideo.m \
+            build/corevideo-behavior.m -framework CoreVideo \
+            -framework Foundation -o build/corevideo-behavior
+          build/corevideo-behavior
+          xcrun clang -fmodules -O2 \
+            build/LiveExec32/GuestFrameworks/CoreMedia/CoreMedia.m \
+            .github/tests/coremedia-blockbuffer-behavior.m \
+            -framework CoreMedia -framework CoreVideo \
+            -framework AudioToolbox -framework Foundation \
+            -o build/coremedia-blockbuffer-behavior
+          build/coremedia-blockbuffer-behavior

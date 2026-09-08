@@ -1,5 +1,6 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#import <AudioToolbox/AudioToolbox.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,17 +72,50 @@ int main(void) {
                                                   &needed) == noErr);
     assert(CMTimeGetSeconds(copied.duration) == CMTimeGetSeconds(timing.duration));
 
+    AudioStreamBasicDescription asbd;
+    memset(&asbd, 0, sizeof(asbd));
+    asbd.mSampleRate = 44100;
+    asbd.mFormatID = kAudioFormatLinearPCM;
+    asbd.mFormatFlags = kAudioFormatFlagIsSignedInteger |
+                        kAudioFormatFlagIsPacked;
+    asbd.mBytesPerPacket = asbd.mBytesPerFrame = 4;
+    asbd.mFramesPerPacket = 1;
+    asbd.mChannelsPerFrame = 2;
+    asbd.mBitsPerChannel = 16;
+    CMAudioFormatDescriptionRef audioFormat = 0;
+    assert(CMAudioFormatDescriptionCreate(0, &asbd, 0, 0, 0, 0, 0,
+                                          &audioFormat) == noErr);
+    const AudioStreamBasicDescription *copiedASBD =
+        CMAudioFormatDescriptionGetStreamBasicDescription(audioFormat);
+    assert(copiedASBD && copiedASBD->mSampleRate == 44100 &&
+           copiedASBD->mChannelsPerFrame == 2);
+
     CMSampleBufferRef dataSample = 0;
     size_t sampleSize = CMBlockBufferGetDataLength(block);
     assert(CMSampleBufferCreate(0, block, false, makeReady, (void *)0x5678,
-        format, 1, 1, &timing, 1, &sampleSize, &dataSample) == noErr);
+        audioFormat, 1, 1, &timing, 1, &sampleSize, &dataSample) == noErr);
     assert(CMSampleBufferGetDataBuffer(dataSample) == block);
     assert(CMSampleBufferDataIsReady(dataSample) && readyCalls == 1);
     assert(CMSampleBufferDataIsReady(dataSample) && readyCalls == 1);
+    size_t audioListSize = 0;
+    assert(CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        dataSample, &audioListSize, 0, 0, 0, 0, 0, 0) != noErr);
+    assert(audioListSize <= sizeof(AudioBufferList));
+    AudioBufferList audioList;
+    CMBlockBufferRef retainedBlock = 0;
+    assert(CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        dataSample, &audioListSize, &audioList, sizeof(audioList),
+        0, 0, 0, &retainedBlock) == noErr);
+    assert(retainedBlock == block && audioList.mNumberBuffers == 1);
+    assert(audioList.mBuffers[0].mNumberChannels == 2 &&
+           audioList.mBuffers[0].mDataByteSize == sampleSize);
+    assert(((unsigned char *)audioList.mBuffers[0].mData)[2] == 9);
+    CFRelease(retainedBlock);
     assert(CMSampleBufferInvalidate(imageSample) == noErr);
     assert(!CMSampleBufferDataIsReady(imageSample));
 
     CFRelease(dataSample);
+    CFRelease(audioFormat);
     CFRelease(imageSample);
     CFRelease(format);
     CVPixelBufferRelease(pixel);

@@ -213,6 +213,8 @@ typedef struct {
     CMMediaType mediaType;
     FourCharCode mediaSubtype;
     CMVideoDimensions dimensions;
+    AudioStreamBasicDescription audio;
+    Boolean hasAudio;
 } LC32FormatDescriptionFields;
 
 @interface LC32FormatDescription : NSObject {
@@ -257,6 +259,35 @@ static LC32SampleBuffer *LC32SB(CMSampleBufferRef value) {
     id object = (id)value;
     return [object isKindOfClass:[LC32SampleBuffer class]]
         ? (LC32SampleBuffer *)object : nil;
+}
+
+OSStatus CMAudioFormatDescriptionCreate(
+    CFAllocatorRef allocator, const AudioStreamBasicDescription *asbd,
+    size_t layoutSize, const AudioChannelLayout *layout,
+    size_t magicCookieSize, const void *magicCookie,
+    CFDictionaryRef extensions, CMAudioFormatDescriptionRef *out) {
+    (void)allocator; (void)extensions;
+    if(!out || !asbd || (layoutSize && !layout) ||
+       (magicCookieSize && !magicCookie))
+        return kCMFormatDescriptionError_InvalidParameter;
+    *out = NULL;
+    LC32FormatDescription *description = [LC32FormatDescription new];
+    if(!description) return kCMFormatDescriptionError_AllocationFailed;
+    description->fields.mediaType = kCMMediaType_Audio;
+    description->fields.mediaSubtype = asbd->mFormatID;
+    description->fields.audio = *asbd;
+    description->fields.hasAudio = true;
+    *out = (CMAudioFormatDescriptionRef)description;
+    return noErr;
+}
+
+const AudioStreamBasicDescription *
+CMAudioFormatDescriptionGetStreamBasicDescription(
+    CMAudioFormatDescriptionRef value) {
+    id object = (id)value;
+    if(![object isKindOfClass:[LC32FormatDescription class]]) return NULL;
+    LC32FormatDescription *description = (LC32FormatDescription *)object;
+    return description->fields.hasAudio ? &description->fields.audio : NULL;
 }
 
 OSStatus CMVideoFormatDescriptionCreateForImageBuffer(
@@ -422,6 +453,41 @@ OSStatus CMSampleBufferGetSampleTimingInfoArray(
     if(entryCount == 0 && !arrayToFill) return noErr;
     return entryCount < sample->timingCount
         ? kCMSampleBufferError_ArrayTooSmall : noErr;
+}
+
+OSStatus CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+    CMSampleBufferRef value, size_t *sizeNeededOut,
+    AudioBufferList *bufferListOut, size_t bufferListSize,
+    CFAllocatorRef structureAllocator, CFAllocatorRef blockAllocator,
+    uint32_t flags, CMBlockBufferRef *blockBufferOut) {
+    (void)structureAllocator; (void)blockAllocator; (void)flags;
+    LC32SampleBuffer *sample = LC32SB(value);
+    const size_t needed = offsetof(AudioBufferList, mBuffers) +
+        sizeof(AudioBuffer);
+    if(sizeNeededOut) *sizeNeededOut = needed;
+    if(blockBufferOut) *blockBufferOut = NULL;
+    if(!sample || !sample->valid || !sample->ready || !sample->dataBuffer)
+        return kCMSampleBufferError_BufferNotReady;
+    const AudioStreamBasicDescription *asbd =
+        sample->format ? CMAudioFormatDescriptionGetStreamBasicDescription(
+            (CMAudioFormatDescriptionRef)sample->format) : NULL;
+    if(!asbd) return kCMSampleBufferError_InvalidMediaFormat;
+    if(!bufferListOut || bufferListSize < needed)
+        return kCMSampleBufferError_ArrayTooSmall;
+    size_t atOffset = 0, total = 0;
+    char *bytes = NULL;
+    OSStatus status = CMBlockBufferGetDataPointer(sample->dataBuffer, 0,
+        &atOffset, &total, &bytes);
+    if(status != noErr || atOffset < total || total > UINT32_MAX)
+        return kCMSampleBufferError_InvalidMediaFormat;
+    memset(bufferListOut, 0, needed);
+    bufferListOut->mNumberBuffers = 1;
+    bufferListOut->mBuffers[0].mNumberChannels = asbd->mChannelsPerFrame;
+    bufferListOut->mBuffers[0].mDataByteSize = (UInt32)total;
+    bufferListOut->mBuffers[0].mData = bytes;
+    if(blockBufferOut)
+        *blockBufferOut = (CMBlockBufferRef)CFRetain(sample->dataBuffer);
+    return noErr;
 }
 
 OSStatus CMSampleBufferInvalidate(CMSampleBufferRef value) {
