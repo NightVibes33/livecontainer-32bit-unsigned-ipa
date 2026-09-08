@@ -61,7 +61,7 @@ CGPoint CGPointFromString(NSString *string) {
 
 corevideo = ROOT / "GuestFrameworks/CoreVideo"
 corevideo.mkdir(parents=True, exist_ok=True)
-(corevideo / "CoreVideo.m").write_text("""#import <CoreVideo/CoreVideo.h>\n#import <Foundation/Foundation.h>\n#include <stdint.h>\n#include <stdlib.h>
+(corevideo / "CoreVideo.m").write_text("""#import <CoreVideo/CoreVideo.h>\n#import <Foundation/Foundation.h>\n#import <OpenGLES/ES2/gl.h>\n#include <stdint.h>\n#include <stdlib.h>
 const CFStringRef kCVPixelBufferPixelFormatTypeKey = CFSTR("PixelFormatType");
 const CFStringRef kCVPixelBufferBytesPerRowAlignmentKey = CFSTR("BytesPerRowAlignment");
 const CFStringRef kCVPixelBufferHeightKey = CFSTR("Height");
@@ -99,11 +99,19 @@ CVReturn CVPixelBufferCreateWithBytes(CFAllocatorRef a, size_t w, size_t h, OSTy
 CVReturn CVPixelBufferPoolCreatePixelBuffer(CFAllocatorRef a, CVPixelBufferPoolRef p, CVPixelBufferRef *o) { if(o) *o=NULL; return kCVReturnUnsupported; }
 void CVPixelBufferRelease(CVPixelBufferRef b) { if(b) CFRelease(b); }
 #ifndef LC32_COREVIDEO_BEHAVIOR_TEST
-CVReturn CVOpenGLESTextureCacheCreate(CFAllocatorRef a, CFDictionaryRef ca, EAGLContext *c, CFDictionaryRef ta, CVOpenGLESTextureCacheRef *o) { if(o) *o=NULL; return kCVReturnUnsupported; }
-CVReturn CVOpenGLESTextureCacheCreateTextureFromImage(CFAllocatorRef a, CVOpenGLESTextureCacheRef c, CVImageBufferRef i, CFDictionaryRef d, GLenum t, GLint in, GLsizei w, GLsizei h, GLenum f, GLenum ty, size_t p, CVOpenGLESTextureRef *o) { if(o) *o=NULL; return kCVReturnUnsupported; }
-void CVOpenGLESTextureCacheFlush(CVOpenGLESTextureCacheRef c, CVOptionFlags o) {}
-GLuint CVOpenGLESTextureGetName(CVOpenGLESTextureRef i) { return 0; }
-GLenum CVOpenGLESTextureGetTarget(CVOpenGLESTextureRef i) { return 0; }
+@interface LC32TextureCache : NSObject { @public EAGLContext *context; } @end
+@implementation LC32TextureCache
+- (void)dealloc { [context release]; [super dealloc]; }
+@end
+@interface LC32Texture : NSObject { @public GLuint name; GLenum target; } @end
+@implementation LC32Texture
+- (void)dealloc { if(name) glDeleteTextures(1,&name); [super dealloc]; }
+@end
+CVReturn CVOpenGLESTextureCacheCreate(CFAllocatorRef a, CFDictionaryRef ca, EAGLContext *c, CFDictionaryRef ta, CVOpenGLESTextureCacheRef *o) { if(!o || !c) return kCVReturnInvalidArgument; *o=NULL; LC32TextureCache *cache=[LC32TextureCache new]; cache->context=[c retain]; *o=(CVOpenGLESTextureCacheRef)cache; return kCVReturnSuccess; }
+CVReturn CVOpenGLESTextureCacheCreateTextureFromImage(CFAllocatorRef a, CVOpenGLESTextureCacheRef c, CVImageBufferRef i, CFDictionaryRef d, GLenum target, GLint internalFormat, GLsizei w, GLsizei h, GLenum format, GLenum type, size_t plane, CVOpenGLESTextureRef *o) { if(!o || !c || !i || w<=0 || h<=0) return kCVReturnInvalidArgument; *o=NULL; void *pixels=CVPixelBufferGetPlaneCount((CVPixelBufferRef)i)?CVPixelBufferGetBaseAddressOfPlane((CVPixelBufferRef)i,plane):CVPixelBufferGetBaseAddress((CVPixelBufferRef)i); if(!pixels) return kCVReturnInvalidArgument; LC32Texture *texture=[LC32Texture new]; texture->target=target; glGenTextures(1,&texture->name); if(!texture->name){[texture release];return kCVReturnAllocationFailed;} glBindTexture(target,texture->name); glTexImage2D(target,0,internalFormat,w,h,0,format,type,pixels); if(glGetError()!=GL_NO_ERROR){[texture release];return kCVReturnError;} *o=(CVOpenGLESTextureRef)texture; return kCVReturnSuccess; }
+void CVOpenGLESTextureCacheFlush(CVOpenGLESTextureCacheRef c, CVOptionFlags o) { if(c) glFlush(); }
+GLuint CVOpenGLESTextureGetName(CVOpenGLESTextureRef i) { return i?((LC32Texture *)(id)i)->name:0; }
+GLenum CVOpenGLESTextureGetTarget(CVOpenGLESTextureRef i) { return i?((LC32Texture *)(id)i)->target:0; }
 #endif
 """)
 plist_source = ROOT / "GuestMakefile/FrameworkInfoPlists/CoreMedia.plist"
