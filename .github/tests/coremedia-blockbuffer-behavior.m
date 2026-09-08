@@ -16,9 +16,12 @@ int main(void) {
     unsigned char first[] = {0,1,2,3,4,5};
     assert(CMBlockBufferAppendMemoryBlock(block, first, sizeof(first),
         kCFAllocatorNull, 0, 1, 4, 0) == noErr);
-    CMBlockBufferCustomBlockSource source = {
-        0, allocateBlock, freeBlock, (void *)0x1234
-    };
+    CMBlockBufferCustomBlockSource source;
+    memset(&source, 0, sizeof(source));
+    source.version = 0;
+    source.AllocateBlock = allocateBlock;
+    source.FreeBlock = freeBlock;
+    source.refCon = (void *)0x1234;
     assert(CMBlockBufferAppendMemoryBlock(block, 0, 8, 0, &source,
         2, 3, 0) == noErr);
     assert(allocations == 1 && frees == 0);
