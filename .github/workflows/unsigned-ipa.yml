@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 3d8760320d981f16aa4b00dd77917b447ac5b774
-      LIVEEXEC32_BUILD_REVISION: '65'
+      LIVEEXEC32_BUILD_REVISION: '66'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -239,7 +239,7 @@ jobs:
           build/accelerate-behavior
           xcrun clang -fmodules -O2 -DLC32_COREVIDEO_BEHAVIOR_TEST build/LiveExec32/GuestFrameworks/CoreVideo/CoreVideo.m build/corevideo-behavior.m -framework CoreVideo -framework Foundation -o build/corevideo-behavior
           build/corevideo-behavior
-          xcrun clang -fmodules -O2 build/LiveExec32/GuestFrameworks/CoreMedia/CoreMedia.m .github/tests/coremedia-blockbuffer-behavior.m -framework CoreMedia -framework Foundation -o build/coremedia-blockbuffer-behavior
+          xcrun clang -fmodules -O2 build/LiveExec32/GuestFrameworks/CoreMedia/CoreMedia.m .github/tests/coremedia-blockbuffer-behavior.m -framework CoreMedia -framework CoreVideo -framework Foundation -o build/coremedia-blockbuffer-behavior
           build/coremedia-blockbuffer-behavior
 
           gmake -C build/LiveExec32/GuestMakefile generate-shims

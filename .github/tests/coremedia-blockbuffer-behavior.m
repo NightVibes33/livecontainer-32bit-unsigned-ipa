@@ -1,8 +1,12 @@
 #import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
-static int allocations, frees;
+static int allocations, frees, readyCalls;
+static OSStatus makeReady(CMSampleBufferRef sample, void *context) {
+    assert(sample && context == (void *)0x5678); readyCalls++; return noErr;
+}
 static void *allocateBlock(void *context, size_t size) {
     assert(context == (void *)0x1234); allocations++;
     unsigned char *p = malloc(size); memset(p, 0x31, size); return p;
@@ -34,6 +38,53 @@ int main(void) {
     assert(CMBlockBufferAccessDataBytes(block, 1, 4, temporary, &range) == noErr);
     assert(range[1] == 9 && range[3] == 0x31);
     assert(CMBlockBufferAccessDataBytes(block, 6, 2, temporary, &range) != noErr);
+
+    CVPixelBufferRef pixel = 0;
+    assert(CVPixelBufferCreate(0, 8, 6, kCVPixelFormatType_32BGRA,
+                               0, &pixel) == noErr && pixel);
+    CMVideoFormatDescriptionRef format = 0;
+    assert(CMVideoFormatDescriptionCreateForImageBuffer(0, pixel,
+                                                        &format) == noErr);
+    CMSampleTimingInfo timing = {
+        CMTimeMake(1, 30), CMTimeMake(10, 30), kCMTimeInvalid
+    };
+    CMSampleBufferRef imageSample = 0;
+    assert(CMSampleBufferCreateForImageBuffer(0, pixel, true, 0, 0,
+        format, &timing, &imageSample) == noErr && imageSample);
+    assert(CMSampleBufferDataIsReady(imageSample));
+    assert(CMSampleBufferGetImageBuffer(imageSample) == pixel);
+    assert(CMSampleBufferGetFormatDescription(imageSample) == format);
+    assert(CMSampleBufferGetDataBuffer(imageSample) == 0);
+    assert(CMSampleBufferGetNumSamples(imageSample) == 1);
+    assert(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(imageSample))
+           == CMTimeGetSeconds(timing.presentationTimeStamp));
+    assert(CMTimeGetSeconds(CMSampleBufferGetOutputPresentationTimeStamp(imageSample))
+           == CMTimeGetSeconds(timing.presentationTimeStamp));
+    assert(CFArrayGetCount(CMSampleBufferGetSampleAttachmentsArray(
+        imageSample, true)) == 1);
+    CMItemCount needed = 0;
+    assert(CMSampleBufferGetSampleTimingInfoArray(imageSample, 0, 0,
+                                                  &needed) == noErr);
+    assert(needed == 1);
+    CMSampleTimingInfo copied;
+    assert(CMSampleBufferGetSampleTimingInfoArray(imageSample, 1, &copied,
+                                                  &needed) == noErr);
+    assert(CMTimeGetSeconds(copied.duration) == CMTimeGetSeconds(timing.duration));
+
+    CMSampleBufferRef dataSample = 0;
+    size_t sampleSize = CMBlockBufferGetDataLength(block);
+    assert(CMSampleBufferCreate(0, block, false, makeReady, (void *)0x5678,
+        format, 1, 1, &timing, 1, &sampleSize, &dataSample) == noErr);
+    assert(CMSampleBufferGetDataBuffer(dataSample) == block);
+    assert(CMSampleBufferDataIsReady(dataSample) && readyCalls == 1);
+    assert(CMSampleBufferDataIsReady(dataSample) && readyCalls == 1);
+    assert(CMSampleBufferInvalidate(imageSample) == noErr);
+    assert(!CMSampleBufferDataIsReady(imageSample));
+
+    CFRelease(dataSample);
+    CFRelease(imageSample);
+    CFRelease(format);
+    CVPixelBufferRelease(pixel);
     CFRelease(block);
     assert(frees == 1);
     return 0;
