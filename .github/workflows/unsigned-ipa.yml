@@ -217,6 +217,21 @@ jobs:
           test -f build/LiveExec32/GuestFrameworks/CoreMedia/CoreMediaSampleBuffer.m
           test -f build/LiveExec32/test/audio_converter.c
 
+          # Restore only corpus additions that apply cleanly after nightly.
+          python3 .github/scripts/patch-liveexec32-accelerate.py
+          python3 .github/scripts/patch-liveexec32-coregraphics-corpus.py
+          python3 .github/scripts/patch-liveexec32-coregraphics-pdf.py
+          python3 .github/scripts/patch-liveexec32-coremedia.py
+          python3 .github/scripts/patch-liveexec32-focus-image-bridge.py
+          python3 .github/scripts/patch-liveexec32-missing-images.py
+          python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
+          python3 .github/scripts/patch-liveexec32-quartzcore.py
+          python3 .github/scripts/patch-liveexec32-uikit.py
+          python3 .github/scripts/patch-liveexec32-security.py
+          python3 .github/scripts/patch-liveexec32-gamekit.py
+          python3 .github/scripts/patch-liveexec32-gamecontroller.py
+          python3 .github/scripts/patch-liveexec32-iad.py
+
           gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
