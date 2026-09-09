@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '71'
+      LIVEEXEC32_BUILD_REVISION: '72'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -219,7 +219,6 @@ jobs:
 
           # Restore only corpus additions that apply cleanly after nightly.
           python3 .github/scripts/patch-liveexec32-accelerate.py
-          python3 .github/scripts/patch-liveexec32-coregraphics-corpus.py
           python3 .github/scripts/patch-liveexec32-coregraphics-pdf.py
           python3 .github/scripts/patch-liveexec32-coremedia.py
           python3 .github/scripts/patch-liveexec32-focus-image-bridge.py
