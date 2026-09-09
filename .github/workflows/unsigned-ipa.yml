@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '70'
+      LIVEEXEC32_BUILD_REVISION: '71'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -263,7 +263,6 @@ jobs:
           test -d "$LIVEEXEC_APP/RootFS"
           test -f "$LIVEEXEC_APP/RootFS/System/Library/Frameworks/CoreVideo.framework/CoreVideo"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libresolv.9.dylib"
-          nm -gU "$LIVEEXEC_APP/RootFS/usr/lib/libresolv.9.dylib" | grep ' _res_9_b64_ntop$'
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
           test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"

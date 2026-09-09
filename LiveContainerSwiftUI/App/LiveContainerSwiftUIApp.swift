@@ -12,7 +12,7 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
 
     private static let bundled32BitEmulatorName = "LiveExec32.app"
     private static let bundled32BitEmulatorCommit = "0b588dc3d73497a79f0f9328b242c370e15d9f1f"
-    private static let bundled32BitEmulatorRevision = "70"
+    private static let bundled32BitEmulatorRevision = "71"
 
     private static func seedBundled32BitEmulator(using fm: FileManager) throws {
         let bundledURL = Bundle.main.bundleURL.appendingPathComponent(bundled32BitEmulatorName, isDirectory: true)
