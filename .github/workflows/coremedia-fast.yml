@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: LiveContainer/LiveExec32
-          ref: 3d8760320d981f16aa4b00dd77917b447ac5b774
+          ref: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
           path: build/LiveExec32
           submodules: false
           persist-credentials: false
