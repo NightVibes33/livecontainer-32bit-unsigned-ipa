@@ -501,3 +501,21 @@ OSStatus CMSampleBufferInvalidate(CMSampleBufferRef value) {
 """
     p.write_text(s)
 print("CoreMedia: added owned video descriptions and timed sample buffers")
+
+
+# Nightly defines two host-forwarded sample accessors in a separate source.
+# The guest-owned sample-buffer implementation above must own those symbols so
+# buffers created inside the guest remain usable without exposing host pointers.
+import re
+_sample_source = Path("build/LiveExec32/GuestFrameworks/CoreMedia/CoreMediaSampleBuffer.m")
+if _sample_source.exists():
+    _sample_text = _sample_source.read_text()
+    for _pattern in (
+        r"\nCVImageBufferRef CMSampleBufferGetImageBuffer\(CMSampleBufferRef sampleBuffer\) \{.*?\n\}\n",
+        r"\nCMTime CMSampleBufferGetPresentationTimeStamp\(CMSampleBufferRef sampleBuffer\) \{.*?\n\}\n",
+    ):
+        _sample_text, _count = re.subn(_pattern, "\n", _sample_text, count=1, flags=re.S)
+        if _count != 1:
+            raise SystemExit("nightly CoreMedia sample accessor anchor missing")
+    _sample_source.write_text(_sample_text)
+    print("CoreMedia: retained guest-owned sample accessors over nightly forwarding")
