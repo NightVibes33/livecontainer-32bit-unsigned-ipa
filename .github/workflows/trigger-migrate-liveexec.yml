@@ -13,7 +13,55 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch unsigned IPA build
+      - name: Dispatch and capture unsigned IPA build
+        id: target
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run unsigned-ipa.yml --repo NightVibes33/livecontainer-32bit-unsigned-ipa --ref migrate-liveexec-nightly
+        run: |
+          set -euo pipefail
+          repo="NightVibes33/livecontainer-32bit-unsigned-ipa"
+          workflow="unsigned-ipa.yml"
+          ref="migrate-liveexec-nightly"
+
+          gh workflow run "$workflow" --repo "$repo" --ref "$ref"
+
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --repo "$repo" --workflow "$workflow" --branch "$ref" --event workflow_dispatch --commit "$GITHUB_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run_id" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "Could not resolve dispatched workflow run for $GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          echo "$run_id" > target-run-id.txt
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+          gh run watch "$run_id" --repo "$repo" --exit-status || true
+          gh run view "$run_id" --repo "$repo" --json databaseId,headSha,status,conclusion,url > target-run.json
+          gh run view "$run_id" --repo "$repo" --log-failed > target-failed.log 2>&1 || true
+
+          conclusion=$(gh run view "$run_id" --repo "$repo" --json conclusion --jq '.conclusion')
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+
+      - name: Upload captured target diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: migrated-liveexec-target-diagnostics
+          path: |
+            target-run-id.txt
+            target-run.json
+            target-failed.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Mirror target result
+        if: steps.target.outputs.conclusion != 'success'
+        run: exit 1
