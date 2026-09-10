@@ -222,6 +222,7 @@ jobs:
           python3 .github/scripts/patch-liveexec32-coremedia.py
           python3 .github/scripts/patch-liveexec32-missing-images.py
           python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
+          python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-uikit.py
           python3 .github/scripts/patch-liveexec32-security.py
           python3 .github/scripts/patch-liveexec32-iad.py
