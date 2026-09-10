@@ -3,15 +3,13 @@ from pathlib import Path
 
 path = Path("build/LiveExec32/GuestFrameworks/iAd/iAd.m")
 source = path.read_text()
-anchor = '''NSString *const ADBannerContentSizeIdentifierLandscape =
-    @"ADBannerContentSizeLandscape";'''
-if source.count(anchor) != 1:
-    raise SystemExit("expected exactly one iAd landscape constant")
-addition = r'''
 
-NSString *const ADBannerContentSizeIdentifier320x50 =
-    @"ADBannerContentSize320x50";
-NSString *const ADBannerContentSizeIdentifier480x32 =
-    @"ADBannerContentSize480x32";
-'''
-path.write_text(source.replace(anchor, anchor + addition))
+# These legacy banner constants are native to the pinned nightly runtime now.
+# Keep this migration hook as an assertion instead of re-defining them.
+required = (
+    "ADBannerContentSizeIdentifier320x50",
+    "ADBannerContentSizeIdentifier480x32",
+)
+for symbol in required:
+    if source.count(symbol) != 1:
+        raise SystemExit(f"expected nightly iAd export exactly once: {symbol}")
