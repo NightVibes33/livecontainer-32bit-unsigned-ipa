@@ -16,4 +16,4 @@ jobs:
       - name: Dispatch unsigned IPA build
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run unsigned-ipa.yml --ref migrate-liveexec-nightly
+        run: gh workflow run unsigned-ipa.yml --repo NightVibes33/livecontainer-32bit-unsigned-ipa --ref migrate-liveexec-nightly
