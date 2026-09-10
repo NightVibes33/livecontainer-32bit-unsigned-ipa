@@ -1,0 +1,19 @@
+name: Trigger migrated LiveExec32 build
+
+on:
+  push:
+    branches:
+      - migrate-liveexec-nightly
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch unsigned IPA build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run unsigned-ipa.yml --ref migrate-liveexec-nightly
