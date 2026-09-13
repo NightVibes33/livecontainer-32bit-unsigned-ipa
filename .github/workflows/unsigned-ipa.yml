@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '78'
+      LIVEEXEC32_BUILD_REVISION: '79'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -217,12 +217,15 @@ jobs:
           test -f build/LiveExec32/GuestFrameworks/CoreMedia/CoreMediaSampleBuffer.m
           test -f build/LiveExec32/test/audio_converter.c
 
-          # Restore only corpus additions that apply cleanly after nightly.
+          # Generate nightly shims first so additive patches can skip every
+          # symbol now supplied upstream.
+          gmake -C build/LiveExec32/GuestMakefile generate-shims
+          python3 .github/scripts/patch-liveexec32-missing-images.py
           python3 .github/scripts/patch-liveexec32-accelerate.py
           python3 .github/scripts/patch-liveexec32-coremedia.py
-          python3 .github/scripts/patch-liveexec32-missing-images.py
+          python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
+          python3 .github/scripts/patch-liveexec32-quartzcore.py
 
-          gmake -C build/LiveExec32/GuestMakefile generate-shims
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
 

@@ -596,6 +596,16 @@ static id LC32CorpusStringConstant(const char *symbol, NSString *fallback) {
 for framework, entries in constants.items():
     directory = root / framework
     directory.mkdir(parents=True, exist_ok=True)
+    output = directory / "LC32CorpusObjectConstants.m"
+    existing_sources = [candidate for candidate in directory.rglob("*.m")
+                        if candidate != output]
+    generated_directory = root / ".generated" / framework
+    if generated_directory.is_dir():
+        existing_sources.extend(generated_directory.rglob("*.m"))
+    existing_text = "\n".join(candidate.read_text() for candidate in existing_sources)
+    original_count = len(entries)
+    entries = [(symbol, kind) for symbol, kind in entries
+               if symbol not in existing_text]
     declarations = []
     initializers = []
     for index, (symbol, kind) in enumerate(entries):
@@ -619,8 +629,11 @@ for framework, entries in constants.items():
     source += "__attribute__((constructor))\n"
     source += f"static void LC32Initialize{framework}CorpusConstants(void) {{\n"
     source += "\n".join(initializers) + "\n}\n"
-    (directory / "LC32CorpusObjectConstants.m").write_text(source)
-    print(f"{framework}: {len(entries)} host-backed object constants")
+    if entries:
+        output.write_text(source)
+    elif output.exists():
+        output.unlink()
+    print(f"{framework}: {len(entries)} added, {original_count - len(entries)} supplied by nightly")
 glkit = root / "GLKit/LC32MatrixConstants.m"
 glkit_sources = [candidate for candidate in root.rglob("*.m")
                  if candidate != glkit and "GLKMatrix4Identity" in candidate.read_text()]
