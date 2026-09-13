@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '83'
+      LIVEEXEC32_BUILD_REVISION: '84'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -165,6 +165,13 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Restore patched LiveExec32 package
+        id: liveexec-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/liveexec-package
+          key: lc32-package-v1-${{ runner.os }}-${{ env.LIVEEXEC32_SHA }}-${{ hashFiles('.github/scripts/patch-liveexec32-*.py', '.github/scripts/build-guest-libiconv.sh') }}
+
       - name: Restore extracted guest ramdisk
         id: ramdisk-cache
         uses: actions/cache/restore@v6
@@ -207,6 +214,7 @@ jobs:
           echo "$TOOLS_DIR" >> "$GITHUB_PATH"
 
       - name: Build current LiveExec32 app and guest root filesystem
+        if: steps.liveexec-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -295,12 +303,44 @@ jobs:
           echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
           echo "LIVEEXEC_SHARED=$LIVEEXEC_SHARED" >> "$GITHUB_ENV"
 
+      - name: Restore cached LiveExec32 environment
+        if: steps.liveexec-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          LIVEEXEC_APP=$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)
+          test -n "$LIVEEXEC_APP"
+          LIVEEXEC_SHARED="$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH"
+          test -f "$LIVEEXEC_APP/LiveExec32"
+          test -f "$LIVEEXEC_SHARED"
+          test -d "$LIVEEXEC_APP/RootFS"
+          /usr/libexec/PlistBuddy -c 'Delete :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :LCBundledBuildRevision string $LIVEEXEC32_BUILD_REVISION" "$LIVEEXEC_APP/Info.plist"
+          echo "LIVEEXEC_APP=$LIVEEXEC_APP" >> "$GITHUB_ENV"
+          echo "LIVEEXEC_SHARED=$LIVEEXEC_SHARED" >> "$GITHUB_ENV"
+
+      - name: Save patched LiveExec32 package
+        if: steps.liveexec-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/liveexec-package
+          key: ${{ steps.liveexec-cache.outputs.cache-primary-key }}
+
       - name: Save extracted guest ramdisk
         if: steps.ramdisk-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
           key: lc32-ramdisk-v1-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
+
+      - name: Restore LiveContainer DerivedData
+        id: derived-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.DERIVED_DATA }}
+          key: livecontainer-derived-v1-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            livecontainer-derived-v1-${{ runner.os }}-
 
       - name: Build LiveContainer without signing
         id: build_host
@@ -338,6 +378,13 @@ jobs:
           path: build/xcodebuild.log
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Save LiveContainer DerivedData
+        if: steps.build_host.outcome == 'success' && steps.derived-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.DERIVED_DATA }}
+          key: ${{ steps.derived-cache.outputs.cache-primary-key }}
 
       - name: Stop after host build failure
         if: steps.build_host.outcome == 'failure'
