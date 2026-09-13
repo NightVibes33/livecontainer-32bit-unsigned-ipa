@@ -366,6 +366,43 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
 
     // If JIT is enabled, bypass library validation so we can load arbitrary binaries
     bool isJitEnabled = checkJITEnabled();
+    if (!isJitEnabled && ([guestAppInfo[@"isJITNeeded"] boolValue] || [guestAppInfo[@"is32bit"] boolValue]) && [NSUserDefaults.lcSharedDefaults integerForKey:@"LCJITEnablerType"] == 7) { // JITEnablerTypeStikJITHeadless
+        __block NSError *error;
+        NSExtension *ext = [NSExtension extensionWithIdentifier:LCSharedUtils.liveProcessBundleIdentifier error:&error];
+        if (!ext) {
+            return [@"JIT was required, but could not spawn StikJIT because LiveProcess is missing. " stringByAppendingString:error.localizedDescription];
+        }
+        NSURL *pairingURL = [NSURL fileURLWithPath:[docPath stringByAppendingPathComponent:@"SideStore/Documents/ALTPairingFile.mobiledevicepairing"]];
+        NSURL *ddiURL = [NSURL fileURLWithPath:[docPath stringByAppendingPathComponent:@"SideStore/Documents/DMG"]];
+        [fm createDirectoryAtURL:ddiURL withIntermediateDirectories:YES attributes:nil error:nil];
+        if (![fm fileExistsAtPath:pairingURL.path]) {
+            return @"Unexpected pairing file not found unhandled by UI";
+        }
+        
+        NSExtensionItem *item = [NSExtensionItem new];
+        item.userInfo = @{
+            @"customPayloadDylib": @"@rpath/StikJITHeadless.framework/StikJITHeadless",
+            @"customPayloadEntry": @"StikJITHeadlessMain",
+            @"pairingBookmark": [pairingURL bookmarkDataWithOptions:(1<<11) includingResourceValuesForKeys:0 relativeToURL:0 error:0],
+            @"ddiBookmark": [ddiURL bookmarkDataWithOptions:(1<<11) includingResourceValuesForKeys:0 relativeToURL:0 error:0],
+            @"script": guestAppInfo[@"jitLaunchScriptJs"] ?: @"",
+            @"pid": @(getpid())
+        };
+        ext.requestCancellationBlock = ^(NSUUID *uuid, NSError *jitError) {
+            error = jitError;
+        };
+        [ext beginExtensionRequestWithInputItems:@[item] completion:^(NSUUID *uuid) {
+            CFRunLoopStop(CFRunLoopGetMain());
+        }];
+        CFRunLoopRun();
+        while (!error && !checkJITEnabled()) {
+            usleep(1000*100);
+        }
+        if (error) {
+            return [@"Builtin StikJIT failed: " stringByAppendingString:error.localizedDescription];
+        }
+        isJitEnabled = YES;
+    }
     if (isJitEnabled) {
         init_bypassDyldLibValidation();
     }
@@ -595,7 +632,7 @@ static NSString* invokeAppMain(NSString *selectedApp, NSString *selectedContaine
         return appError;
     }
     
-    if([guestAppInfo[@"dontInjectTweakLoader"] boolValue] && ![guestAppInfo[@"dontLoadTweakLoader"] boolValue]) {
+    if((is32bit || [guestAppInfo[@"dontInjectTweakLoader"] boolValue]) && ![guestAppInfo[@"dontLoadTweakLoader"] boolValue]) {
         tweakLoaderLoaded = true;
         if([guestAppInfo[@"hideLiveContainer"] boolValue]) {
             dlopen([lcMainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/TweakLoader.dylib"].UTF8String, RTLD_LAZY|RTLD_GLOBAL);

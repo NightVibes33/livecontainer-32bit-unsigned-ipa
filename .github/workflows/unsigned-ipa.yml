@@ -18,7 +18,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
       LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '82'
+      LIVEEXEC32_BUILD_REVISION: '83'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -377,6 +377,9 @@ jobs:
           test -f "$HOST/LiveContainer"
           test -f "$EMU/LiveExec32"
           test -f "$EMU/Info.plist"
+          test -f "$HOST/Frameworks/StikJITHeadless.framework/StikJITHeadless"
+          test -f "$HOST/Frameworks/StikJIT.framework/StikJIT"
+          test -d "$HOST/PlugIns/LiveProcess.appex"
           test -f "$SHARED"
           test -d "$EMU/RootFS"
           test -f "$EMU/RootFS/usr/lib/libiconv.2.dylib"
