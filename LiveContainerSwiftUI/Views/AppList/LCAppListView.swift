@@ -1082,20 +1082,19 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         await MainActor.run {
             jitLog = ""
         }
-        let enableJITTask = Task {
-            
-            let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
-                Task { await MainActor.run {
-                    self.jitLog += "\(newMsg)\n"
-                }}
-            }
-            guard let _ = JITEnablerType(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCJITEnablerType")) else {
-                return
-            }
+        let requestHandled = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
+            Task { await MainActor.run {
+                self.jitLog += "\(newMsg)\n"
+            }}
+        }
+        // External JIT enablers such as StikDebug launch and attach to this
+        // process themselves. Do not race that handoff with LiveContainer's
+        // confirmation modal or launch the guest before the debugger attaches.
+        if requestHandled {
+            return
         }
         guard let result = await jitAlert.open(), result else {
             UserDefaults.standard.removeObject(forKey: "selected")
-            enableJITTask.cancel()
             return
         }
         LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
