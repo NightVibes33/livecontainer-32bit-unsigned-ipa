@@ -709,6 +709,9 @@
 }
 
 - (NSString *)jitLaunchScriptJs {
+    if (self.is32bit && LCUtils.isTXMScriptRequired) {
+        return LCUtils.base64EncodedUniversalJITScript;
+    }
     return _info[@"jitLaunchScriptJs"];
 }
 

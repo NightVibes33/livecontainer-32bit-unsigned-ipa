@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - migrate-liveexec-nightly
       - fresh-32bit-upstream-2026-08-30
   workflow_dispatch:
 
@@ -18,7 +19,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: e55609bab48a2b0551ddb5c0574497826e39680f
       LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
-      LIVEEXEC32_BUILD_REVISION: '86'
+      LIVEEXEC32_BUILD_REVISION: '87'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -424,8 +425,6 @@ jobs:
           test -f "$HOST/LiveContainer"
           test -f "$EMU/LiveExec32"
           test -f "$EMU/Info.plist"
-          test -f "$HOST/Frameworks/StikJITHeadless.framework/StikJITHeadless"
-          test -f "$HOST/Frameworks/StikJIT.framework/StikJIT"
           test -d "$HOST/PlugIns/LiveProcess.appex"
           test -f "$SHARED"
           test -d "$EMU/RootFS"
@@ -436,7 +435,7 @@ jobs:
           test ! -e "$HOST/embedded.mobileprovision"
           test ! -d "$HOST/_CodeSignature"
 
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HOST/Info.plist")" = "com.nightvibes33.livecontainer"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HOST/Info.plist")" = "com.kdt.livecontainer"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$EMU/Info.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$EMU/Info.plist")" = "$LIVEEXEC32_SHA"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$EMU/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"

@@ -17,5 +17,4 @@
 + (NSString*)findDefaultContainerWithBundleId:(NSString*)bundleId;
 + (NSArray<NSString*>*)lcUnorderedUrlSchemes;
 + (NSArray<NSString*>*)lcUrlSchemes;
-+ (NSString *)liveProcessBundleIdentifier;
 @end

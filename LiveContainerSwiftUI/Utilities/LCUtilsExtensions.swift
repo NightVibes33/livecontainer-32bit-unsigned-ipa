@@ -303,9 +303,20 @@ extension LCUtils {
             if jitEnabler == .StosDebugLC {
                 let encodedStr = Data(launchURLStr.utf8).base64EncodedString()
 
-                
-                // find an app that can respond to stosdebug://
-                var appToLaunch = DataManager.shared.model.apps.first { app in app.appInfo.urlSchemes().contains("stosdebug") }
+
+                var appToLaunch: LCAppModel? = nil
+                // find an app that can respond to stikjit://
+                appLoop:
+                for app in DataManager.shared.model.apps {
+                    if let schemes = app.appInfo.urlSchemes() {
+                        for scheme in schemes {
+                            if let scheme = scheme as? String, scheme == "stosdebug" {
+                                appToLaunch = app
+                                break appLoop
+                            }
+                        }
+                    }
+                }
                 guard let appToLaunch else {
                     onServerMessage?("StosDebug is not installed in LiveContainer.")
                     return false
@@ -343,9 +354,6 @@ extension LCUtils {
                 await UIApplication.shared.open(URL(string: launchURLStr)!)
             }
             
-        } else if jitEnabler == .StikJITHeadless {
-            LCSharedUtils.launchToGuestApp(withClassicMode: classicMode)
-            return true
         } else if jitEnabler == .StikJIT || jitEnabler == .StikJITLC {
             var launchURLStr = "stikjit://enable-jit?bundle-id=\(Bundle.main.bundleIdentifier!)"
 
@@ -356,9 +364,20 @@ extension LCUtils {
             if jitEnabler == .StikJITLC {
                 let encodedStr = Data(launchURLStr.utf8).base64EncodedString()
 
-                
+
+                var appToLaunch: LCAppModel? = nil
                 // find an app that can respond to stikjit://
-                var appToLaunch = DataManager.shared.model.apps.first { app in app.appInfo.urlSchemes().contains("stikjit") }
+                appLoop:
+                for app in DataManager.shared.model.apps {
+                    if let schemes = app.appInfo.urlSchemes() {
+                        for scheme in schemes {
+                            if let scheme = scheme as? String, scheme == "stikjit" {
+                                appToLaunch = app
+                                break appLoop
+                            }
+                        }
+                    }
+                }
                 guard let appToLaunch else {
                     onServerMessage?("StikDebug is not installed in LiveContainer.")
                     return false

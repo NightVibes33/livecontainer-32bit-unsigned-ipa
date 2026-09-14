@@ -1084,7 +1084,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             jitLog = ""
         }
         let enableJITTask = Task {
-
+            
             let _ = await LCUtils.askForJIT(withScript: script, appName: appName, classicMode: classicMode) { newMsg in
                 Task { await MainActor.run {
                     self.jitLog += "\(newMsg)\n"
@@ -1105,13 +1105,10 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     func jitLaunch(withPID pid: Int, withScript script: String? = nil, appName: String) async {
         await MainActor.run {
-            if let jitEnabler = JITEnablerType(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCJITEnablerType")) {
-                if jitEnabler == .StikJITHeadless {
-                    // let guest app spawn it
-                    return
-                }
+            let encodedData = script?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
                 
-                let encodedData = script?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+            
+            if let jitEnabler = JITEnablerType(rawValue: LCUtils.appGroupUserDefault.integer(forKey: "LCJITEnablerType")) {
                 if jitEnabler == .StosDebug || jitEnabler == .StosDebugLC {
                     let encoded = encodedData.map { "&script=\($0)" } ?? ""
                     if jitEnabler == .StosDebugLC {

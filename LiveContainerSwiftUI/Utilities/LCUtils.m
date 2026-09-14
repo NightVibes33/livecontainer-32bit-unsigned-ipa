@@ -39,8 +39,24 @@
 
 
 #pragma mark Multitasking
++ (NSString *)liveProcessBundleIdentifier {
+    // first check if we have LiveProcess extension in our own bundle
+    NSBundle *liveProcessBundle = [NSBundle bundleWithPath:[NSBundle.mainBundle.builtInPlugInsPath stringByAppendingPathComponent:@"LiveProcess.appex"]];
+    if(liveProcessBundle) {
+        return liveProcessBundle.bundleIdentifier;
+    }
+    
+    // in LC2, attempt to guess LC1's LiveProcess extension
+    NSString *bundleID = [NSString stringWithFormat:@"com.kdt.livecontainer.%@.LiveProcess", LCSharedUtils.teamIdentifier];
+    if([NSExtension extensionWithIdentifier:bundleID error:nil]) {
+        return bundleID;
+    }
+    
+    return nil;
+}
+
 + (void)launchMultitaskGuestApp:(NSString *)displayName completionHandler:(void (^)(NSNumber *pid, NSError *error))completionHandler {
-    if(!LCSharedUtils.liveProcessBundleIdentifier) {
+    if(!self.liveProcessBundleIdentifier) {
         NSError *error = [NSError errorWithDomain:displayName code:2 userInfo:@{NSLocalizedDescriptionKey: @"LiveProcess extension not found. Please reinstall LiveContainer and select Keep Extensions"}];
         if (completionHandler) completionHandler(nil, error);
         return;
@@ -165,6 +181,31 @@
     [self loadStoreFrameworksWithError2:&error];
     int ans = [NSClassFromString(@"ZSigner") checkCert:certData pass:[LCSharedUtils certificatePassword] completionHandler:completionHandler];
     return ans;
+}
+
+#pragma mark JIT
+
++ (BOOL)isTXMScriptRequired {
+    if (@available(iOS 19.0, *)) {
+        // https://github.com/opa334/Dopamine/commit/e8438b4a64ead3997d2c70a575431cb1b4070fb9
+        io_registry_entry_t memory_map = IORegistryEntryFromPath(0, "IODeviceTree:/chosen/memory-map");
+        if (memory_map == IO_OBJECT_NULL)
+            return NO;
+        NSArray *keys = (__bridge NSArray *)IORegistryEntryCreateCFProperty(memory_map, CFSTR(kIORegistryEntryPropertyKeysKey), 0, 0);
+        IOObjectRelease(memory_map);
+        return keys && [keys containsObject:@"TXM"];
+    }
+    return NO;
+}
+
++ (NSString *)base64EncodedUniversalJITScript {
+    static dispatch_once_t onceToken;
+    static NSString *script;
+    dispatch_once(&onceToken, ^{
+        NSData *data = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"universal" ofType:@"js"]];
+        script = [data base64EncodedStringWithOptions:0];
+    });
+    return script;
 }
 
 #pragma mark Setup
