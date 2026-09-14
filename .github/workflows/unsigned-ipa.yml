@@ -16,9 +16,9 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     env:
-      LC_UPSTREAM_SHA: 12377cf3b91d51739a33f14a302e5f522b238593
-      LIVEEXEC32_SHA: 0b588dc3d73497a79f0f9328b242c370e15d9f1f
-      LIVEEXEC32_BUILD_REVISION: '84'
+      LC_UPSTREAM_SHA: e55609bab48a2b0551ddb5c0574497826e39680f
+      LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+      LIVEEXEC32_BUILD_REVISION: '85'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
