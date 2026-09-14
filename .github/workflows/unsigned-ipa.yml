@@ -19,7 +19,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: e55609bab48a2b0551ddb5c0574497826e39680f
       LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
-      LIVEEXEC32_BUILD_REVISION: '87'
+      LIVEEXEC32_BUILD_REVISION: '88'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData
@@ -235,6 +235,8 @@ jobs:
           python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
           python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-target-coregraphics.py
+          python3 .github/scripts/patch-liveexec32-host-argument.py
+          python3 .github/scripts/patch-liveexec32-openal-session.py
 
           gmake -C build/LiveExec32/GuestMakefile
           (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
