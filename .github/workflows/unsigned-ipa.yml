@@ -19,7 +19,7 @@ jobs:
     env:
       LC_UPSTREAM_SHA: e55609bab48a2b0551ddb5c0574497826e39680f
       LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
-      LIVEEXEC32_BUILD_REVISION: '88'
+      LIVEEXEC32_BUILD_REVISION: '89'
       LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
       LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
       DERIVED_DATA: build/DerivedData

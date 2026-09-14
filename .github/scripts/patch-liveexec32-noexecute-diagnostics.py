@@ -6,7 +6,7 @@ old = r'''        } else {
             SetPendingGuestCrashMessageIfEmpty(
                 "Guest exception at pc=0x%08x, exception=%d, instruction=0x%08x",
                 pc, static_cast<int>(exception), code);
-            printf("ExceptionRaised[%s->%s:%d]: pc=0x%x, exception=%d, code=0x%08X\\n", __FILE__, __func__, __LINE__, pc, exception, code);
+            printf("ExceptionRaised[%s->%s:%d]: pc=0x%x, exception=%d, code=0x%08X\n", __FILE__, __func__, __LINE__, pc, exception, code);
             DumpCrashReport(signal);
         }
 '''
@@ -38,7 +38,7 @@ new = r'''        } else {
                     "Guest exception at pc=0x%08x, exception=%d, instruction=0x%08x",
                     pc, static_cast<int>(exception), code);
             }
-            printf("ExceptionRaised[%s->%s:%d]: pc=0x%x, exception=%d, code=0x%08X\\n", __FILE__, __func__, __LINE__, pc, exception, code);
+            printf("ExceptionRaised[%s->%s:%d]: pc=0x%x, exception=%d, code=0x%08X\n", __FILE__, __func__, __LINE__, pc, exception, code);
             DumpCrashReport(signal);
         }
 '''
