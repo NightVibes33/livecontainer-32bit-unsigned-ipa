@@ -393,11 +393,7 @@ extension LCUtils {
                 launchURL = URL(string: launchURLStr)!
                 onServerMessage?("JIT acquisition will continue in StikDebug.")
             }
-            let opened = await UIApplication.shared.open(launchURL)
-            if !opened {
-                onServerMessage?("Unable to open StikDebug. Confirm it is installed and its stikjit URL scheme is available.")
-            }
-            return opened
+            await UIApplication.shared.open(launchURL)
         } else if jitEnabler == .SideStore {
             onServerMessage?("JIT acquisition will continue in SideStore.")
             let launchURL = URL(string: "sidestore://enable-jit?bundle-id=\(Bundle.main.bundleIdentifier!)")!
