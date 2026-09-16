@@ -8,9 +8,16 @@ on:
 
 jobs:
   inspect:
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Install Mach-O inspection tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm file unzip
+
       - name: Download IPA
         shell: bash
         run: |
@@ -25,20 +32,18 @@ jobs:
                   b=r.read(1024*1024)
                   if not b: break
                   f.write(b); total += len(b)
-                  if total % (64*1024*1024) < 1024*1024:
-                      print(f'downloaded {total} bytes')
           print('final bytes', total)
           PY
           ls -lh /tmp/yugioh.ipa
-          shasum -a 256 /tmp/yugioh.ipa
+          sha256sum /tmp/yugioh.ipa
 
       - name: Extract IPA
         shell: bash
         run: |
           set -euxo pipefail
           rm -rf /tmp/yugioh && mkdir -p /tmp/yugioh
-          ditto -x -k /tmp/yugioh.ipa /tmp/yugioh
-          find /tmp/yugioh/Payload -maxdepth 2 -type f | sed -n '1,200p'
+          unzip -q /tmp/yugioh.ipa -d /tmp/yugioh
+          find /tmp/yugioh/Payload -maxdepth 2 -type f | sed -n '1,100p'
 
       - name: Static diagnostics
         shell: bash
@@ -46,59 +51,71 @@ jobs:
           set -u
           REPORT="$RUNNER_TEMP/yugioh-diagnostics.txt"
           APP=$(find /tmp/yugioh/Payload -maxdepth 1 -type d -name '*.app' | head -1)
-          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          EXE=$(python3 - "$APP/Info.plist" <<'PY'
+          import plistlib,sys
+          with open(sys.argv[1],'rb') as f: p=plistlib.load(f)
+          print(p['CFBundleExecutable'])
+          PY
+          )
           BIN="$APP/$EXE"
+          python3 - "$APP/Info.plist" > "$RUNNER_TEMP/Info.plist.txt" <<'PY'
+          import plistlib,pprint,sys
+          with open(sys.argv[1],'rb') as f: pprint.pp(plistlib.load(f), sort_dicts=True)
+          PY
           {
             echo '=== PATHS ==='
             echo "APP=$APP"
             echo "EXE=$EXE"
             echo "BIN=$BIN"
             echo
+            echo '=== IPA HASH ==='
+            sha256sum /tmp/yugioh.ipa
+            echo
             echo '=== INFO.PLIST ==='
-            plutil -p "$APP/Info.plist" || true
+            cat "$RUNNER_TEMP/Info.plist.txt"
             echo
-            echo '=== MAIN BINARY FILE ==='
+            echo '=== MAIN BINARY ==='
             file "$BIN" || true
-            size "$BIN" || true
+            llvm-size "$BIN" || true
             echo
-            echo '=== LOAD COMMANDS ==='
-            otool -hv "$BIN" || true
-            otool -l "$BIN" || true
+            echo '=== MACH-O HEADERS / LOAD COMMANDS ==='
+            llvm-objdump --macho --private-headers "$BIN" || true
             echo
-            echo '=== LINKED LIBRARIES ==='
-            otool -L "$BIN" || true
-            echo
-            echo '=== ENTITLEMENTS / SIGNATURE ==='
-            codesign -dvvv "$APP" 2>&1 || true
-            codesign -d --entitlements :- "$APP" 2>&1 || true
+            echo '=== LINKED DYLIBS ==='
+            llvm-objdump --macho --dylibs-used "$BIN" || true
             echo
             echo '=== MACH-O INVENTORY ==='
             while IFS= read -r f; do
               if file "$f" | grep -q 'Mach-O'; then
                 echo "--- $f"
                 file "$f"
-                otool -L "$f" 2>/dev/null | head -80 || true
+                llvm-objdump --macho --dylibs-used "$f" 2>/dev/null | head -100 || true
               fi
             done < <(find "$APP" -type f)
             echo
             echo '=== FRAMEWORK / PLUGIN INVENTORY ==='
-            find "$APP" -maxdepth 5 \( -name '*.framework' -o -name '*.dylib' -o -name '*.bundle' \) -print | sort
+            find "$APP" -maxdepth 6 \( -name '*.framework' -o -name '*.dylib' -o -name '*.bundle' \) -print | sort
             echo
             echo '=== TOP LARGE FILES ==='
-            find "$APP" -type f -print0 | xargs -0 du -k | sort -nr | head -100
+            find "$APP" -type f -print0 | xargs -0 du -k | sort -nr | head -150
             echo
             echo '=== IMPORTED SYMBOLS: THREADING / SYNC / RUNLOOP / GRAPHICS / AUDIO / NETWORK ==='
-            nm -um "$BIN" 2>/dev/null | egrep -i 'pthread|dispatch|semaphore|mutex|mach_msg|CFRunLoop|CADisplay|EAGL|OpenGLES|Metal|Audio|OpenAL|AVAudio|CFNetwork|NSURLConnection|NSURLSession|socket|select|poll|kqueue|usleep|nanosleep|sleep|UIApplication|background|foreground' | head -1000 || true
+            llvm-nm -u "$BIN" 2>/dev/null | egrep -i 'pthread|dispatch|semaphore|mutex|mach_msg|CFRunLoop|CADisplay|EAGL|OpenGLES|Metal|Audio|OpenAL|AVAudio|CFNetwork|NSURLConnection|NSURLSession|socket|select|poll|kqueue|usleep|nanosleep|sleep|UIApplication|background|foreground' | head -2000 || true
             echo
-            echo '=== STRINGS: ENGINE / UNITY / GRAPHICS / AUDIO / NETWORK / HANG CLUES ==='
-            strings -a "$BIN" | egrep -i 'unity|mono|il2cpp|cocos|unreal|OpenGL|OpenGLES|EAGL|Metal|FMOD|OpenAL|AudioUnit|AVAudio|CFNetwork|NSURL|HTTP|socket|pthread|semaphore|mutex|deadlock|timeout|watchdog|background|foreground|suspend|resume|frame|vsync|render|duel|battle|server|error|assert' | head -5000 || true
+            echo '=== ALL UNDEFINED IMPORTS ==='
+            llvm-nm -u "$BIN" 2>/dev/null | head -10000 || true
             echo
-            echo '=== RESOURCE ENGINE MARKERS ==='
-            find "$APP" -maxdepth 4 -type f | egrep -i 'global-metadata|Managed/|Data/|unity|mono|il2cpp|cocos|fmod|\.assets$|\.resS$' | head -1000 || true
+            echo '=== STRINGS: ENGINE / GRAPHICS / AUDIO / NETWORK / HANG CLUES ==='
+            strings -a "$BIN" | egrep -i 'cocos|unity|mono|il2cpp|unreal|OpenGL|OpenGLES|EAGL|Metal|FMOD|OpenAL|AudioUnit|AVAudio|CFNetwork|NSURL|https?://|socket|pthread|semaphore|mutex|deadlock|timeout|watchdog|background|foreground|suspend|resume|frame|vsync|render|duel|battle|server|error|assert|analytics|flurry|facebook|gamecenter' | head -12000 || true
+            echo
+            echo '=== RESOURCE ENGINE / MODIFICATION MARKERS ==='
+            find "$APP" -maxdepth 6 -type f | egrep -i 'cocos|unity|mono|il2cpp|fmod|global-metadata|Managed/|Data/|\.assets$|\.resS$|patch|hack|mod|chinese|localization' | head -4000 || true
+            echo
+            echo '=== URL-LIKE STRINGS ==='
+            strings -a "$BIN" | grep -Eio 'https?://[^[:space:]"<>]+' | sort -u | head -2000 || true
           } > "$REPORT" 2>&1
           cp "$APP/Info.plist" "$RUNNER_TEMP/Info.plist"
-          echo "REPORT=$REPORT" >> "$GITHUB_ENV"
-          sed -n '1,1200p' "$REPORT"
+          sed -n '1,1800p' "$REPORT"
 
       - name: Upload report
         uses: actions/upload-artifact@v4
@@ -107,4 +124,5 @@ jobs:
           path: |
             ${{ runner.temp }}/yugioh-diagnostics.txt
             ${{ runner.temp }}/Info.plist
+            ${{ runner.temp }}/Info.plist.txt
           if-no-files-found: error
