@@ -1,0 +1,110 @@
+name: YuGiOh IPA diagnostics
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Download IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import urllib.request
+          url='https://archive.org/download/yu-gi-oh-duel-generation/Yu-Gi-Oh%20Duel%20Generation.ipa'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req, timeout=120) as r, open('/tmp/yugioh.ipa','wb') as f:
+              total=0
+              while True:
+                  b=r.read(1024*1024)
+                  if not b: break
+                  f.write(b); total += len(b)
+                  if total % (64*1024*1024) < 1024*1024:
+                      print(f'downloaded {total} bytes')
+          print('final bytes', total)
+          PY
+          ls -lh /tmp/yugioh.ipa
+          shasum -a 256 /tmp/yugioh.ipa
+
+      - name: Extract IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf /tmp/yugioh && mkdir -p /tmp/yugioh
+          ditto -x -k /tmp/yugioh.ipa /tmp/yugioh
+          find /tmp/yugioh/Payload -maxdepth 2 -type f | head -200
+
+      - name: Static diagnostics
+        shell: bash
+        run: |
+          set -u
+          REPORT="$RUNNER_TEMP/yugioh-diagnostics.txt"
+          APP=$(find /tmp/yugioh/Payload -maxdepth 1 -type d -name '*.app' | head -1)
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          BIN="$APP/$EXE"
+          {
+            echo '=== PATHS ==='
+            echo "APP=$APP"
+            echo "EXE=$EXE"
+            echo "BIN=$BIN"
+            echo
+            echo '=== INFO.PLIST ==='
+            plutil -p "$APP/Info.plist" || true
+            echo
+            echo '=== MAIN BINARY FILE ==='
+            file "$BIN" || true
+            size "$BIN" || true
+            echo
+            echo '=== LOAD COMMANDS ==='
+            otool -hv "$BIN" || true
+            otool -l "$BIN" || true
+            echo
+            echo '=== LINKED LIBRARIES ==='
+            otool -L "$BIN" || true
+            echo
+            echo '=== ENTITLEMENTS / SIGNATURE ==='
+            codesign -dvvv "$APP" 2>&1 || true
+            codesign -d --entitlements :- "$APP" 2>&1 || true
+            echo
+            echo '=== MACH-O INVENTORY ==='
+            while IFS= read -r f; do
+              if file "$f" | grep -q 'Mach-O'; then
+                echo "--- $f"
+                file "$f"
+                otool -L "$f" 2>/dev/null | head -80 || true
+              fi
+            done < <(find "$APP" -type f)
+            echo
+            echo '=== FRAMEWORK / PLUGIN INVENTORY ==='
+            find "$APP" -maxdepth 5 \( -name '*.framework' -o -name '*.dylib' -o -name '*.bundle' \) -print | sort
+            echo
+            echo '=== TOP LARGE FILES ==='
+            find "$APP" -type f -print0 | xargs -0 du -k | sort -nr | head -100
+            echo
+            echo '=== IMPORTED SYMBOLS: THREADING / SYNC / RUNLOOP / GRAPHICS / AUDIO / NETWORK ==='
+            nm -um "$BIN" 2>/dev/null | egrep -i 'pthread|dispatch|semaphore|mutex|mach_msg|CFRunLoop|CADisplay|EAGL|OpenGLES|Metal|Audio|OpenAL|AVAudio|CFNetwork|NSURLConnection|NSURLSession|socket|select|poll|kqueue|usleep|nanosleep|sleep|UIApplication|background|foreground' | head -1000 || true
+            echo
+            echo '=== STRINGS: ENGINE / UNITY / GRAPHICS / AUDIO / NETWORK / HANG CLUES ==='
+            strings -a "$BIN" | egrep -i 'unity|mono|il2cpp|cocos|unreal|OpenGL|OpenGLES|EAGL|Metal|FMOD|OpenAL|AudioUnit|AVAudio|CFNetwork|NSURL|HTTP|socket|pthread|semaphore|mutex|deadlock|timeout|watchdog|background|foreground|suspend|resume|frame|vsync|render|duel|battle|server|error|assert' | head -5000 || true
+            echo
+            echo '=== RESOURCE ENGINE MARKERS ==='
+            find "$APP" -maxdepth 4 -type f | egrep -i 'global-metadata|Managed/|Data/|unity|mono|il2cpp|cocos|fmod|\.assets$|\.resS$' | head -1000 || true
+          } > "$REPORT" 2>&1
+          cp "$APP/Info.plist" "$RUNNER_TEMP/Info.plist"
+          echo "REPORT=$REPORT" >> "$GITHUB_ENV"
+          sed -n '1,1200p' "$REPORT"
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: yugioh-ipa-diagnostics
+          path: |
+            ${{ runner.temp }}/yugioh-diagnostics.txt
+            ${{ runner.temp }}/Info.plist
+          if-no-files-found: error
