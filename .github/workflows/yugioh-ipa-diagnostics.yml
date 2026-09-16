@@ -38,7 +38,7 @@ jobs:
           set -euxo pipefail
           rm -rf /tmp/yugioh && mkdir -p /tmp/yugioh
           ditto -x -k /tmp/yugioh.ipa /tmp/yugioh
-          find /tmp/yugioh/Payload -maxdepth 2 -type f | head -200
+          find /tmp/yugioh/Payload -maxdepth 2 -type f | sed -n '1,200p'
 
       - name: Static diagnostics
         shell: bash
