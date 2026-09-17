@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "source": "user-supplied IPA audit",
+  "apps": [
+    {
+      "archive_name": "Kick_the_boss_v1.8_os40.ipa",
+      "sha256": "c59de9b5351e43e8561fc0f303429474014521c052857acc0c21ee1a2282f0ba",
+      "bundle_id": "com.gamehivecorp.kickthebossfree",
+      "display_name": "Boss",
+      "short_version": "1.8",
+      "minimum_os": "4.0",
+      "sdk_name": "iphoneos5.1",
+      "arm32_images": 1,
+      "absolute_libraries": 29,
+      "required_bindings": 1051,
+      "weak_bindings": 52,
+      "missing_required_against_prepatch_rootfs": []
+    },
+    {
+      "archive_name": "Gravity_Falls_v1.0_os42.ipa",
+      "sha256": "b3b1321c8c53ac4189ab78c5f71e4fa8f9f64fd429b7aea505306617b5a11a9c",
+      "bundle_id": "com.disney.gravityfallsmysteryshackattack",
+      "display_name": "Gravity Falls",
+      "short_version": "1.0",
+      "minimum_os": "4.2",
+      "sdk_name": "iphoneos6.1",
+      "arm32_images": 1,
+      "absolute_libraries": 27,
+      "required_bindings": 758,
+      "weak_bindings": 8,
+      "missing_required_against_prepatch_rootfs": [
+        {
+          "library": "/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox",
+          "symbol": "_AudioServicesPlayAlertSound"
+        }
+      ]
+    }
+  ]
+}
