@@ -171,7 +171,7 @@ jobs:
           cat build/cartoon-network-import-coverage.md
       - name: Upload CN compatibility coverage
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: LiveExec32-Cartoon-Network-51-import-coverage
           path: |
@@ -181,7 +181,7 @@ jobs:
           retention-days: 90
       - name: Upload patched runtime
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: LiveExec32-generic-legacy-canvas
           path: build/LiveExec32/packages/*.ipa
