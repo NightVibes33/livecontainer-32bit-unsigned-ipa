@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/scripts/patch-liveexec32-universal-canvas.py'
       - '.github/scripts/patch-liveexec32-cartoon-network-imports.py'
+      - '.github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py'
       - '.github/scripts/check-ipa-import-contract.py'
       - '.github/workflows/canvas-patch-build.yml'
   workflow_dispatch:
@@ -85,10 +86,12 @@ jobs:
           python3 .github/scripts/patch-liveexec32-openal-session.py
           python3 .github/scripts/patch-liveexec32-noexecute-diagnostics.py
           python3 .github/scripts/patch-liveexec32-cartoon-network-imports.py
+          python3 .github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py
           grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
           grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
           grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
           test -f build/LiveExec32/GuestFrameworks/MediaToolbox/MediaToolbox.m
+          test -f build/LiveExec32/GuestFrameworks/MediaToolbox/LC32MTAudioProcessingTapCompat.m
       - name: Build guest frameworks and assemble RootFS
         shell: bash
         run: |
