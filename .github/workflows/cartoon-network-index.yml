@@ -1,34 +1,46 @@
-name: Index Cartoon Network iOS archive
+name: Audit every Cartoon Network iOS archive IPA
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - diag-yugioh-freeze-20260916
     paths:
       - '.github/workflows/cartoon-network-index.yml'
-  workflow_dispatch:
+      - '.github/scripts/audit-ipa-corpus.py'
+      - '.github/scripts/aggregate-cartoon-network-corpus.py'
 
 permissions:
   contents: read
 
 jobs:
-  index:
+  discover:
+    name: Discover complete Cartoon Network IPA corpus
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      ipa_count: ${{ steps.manifest.outputs.ipa_count }}
+      shard_count: ${{ steps.manifest.outputs.shard_count }}
+      shards: ${{ steps.manifest.outputs.shards }}
     steps:
-      - name: Build complete IPA manifest
+      - uses: actions/checkout@v6
+      - name: Build complete archive manifest and dynamic shard matrix
+        id: manifest
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
+          mkdir -p cartoon-network-index
           python3 - <<'PY'
-          import json, urllib.request
+          import json, os, urllib.request
+          from pathlib import Path
+
           identifier='cartoon-network-ios-archive'
           req=urllib.request.Request(
               f'https://archive.org/metadata/{identifier}',
-              headers={'User-Agent':'LiveExec32-CN-index/1'})
+              headers={'User-Agent':'LiveExec32-CN-full-corpus/1'})
           with urllib.request.urlopen(req, timeout=120) as r:
               meta=json.load(r)
+
           apps=[]
           for f in meta.get('files',[]):
               name=f.get('name','')
@@ -41,6 +53,9 @@ jobs:
                   'sha1':f.get('sha1'),
               })
           apps.sort(key=lambda x:x['name'].lower())
+          if not apps:
+              raise SystemExit('Archive metadata contained zero IPA files')
+
           manifest={
               'identifier':identifier,
               'source':f'https://archive.org/download/{identifier}',
@@ -48,24 +63,108 @@ jobs:
               'total_bytes':sum(x['size'] for x in apps),
               'apps':apps,
           }
-          with open('out/cartoon-network-ipas.json','w') as o:
-              json.dump(manifest,o,indent=2,sort_keys=True)
-              o.write('\n')
+          out=Path('cartoon-network-index')
+          (out/'cartoon-network-ipas.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+
+          # Use the full discovered corpus. Jobs are sharded only to keep each
+          # runner bounded; no title/name allowlist exists anywhere in the path.
+          shard_count=min(24,len(apps))
+          shards=list(range(shard_count))
           gib=manifest['total_bytes']/1024**3
-          with open('out/summary.md','w') as o:
-              o.write(f"# Cartoon Network iOS archive\n\n")
-              o.write(f"- IPA files: **{len(apps)}**\n")
-              o.write(f"- Total compressed IPA bytes: **{manifest['total_bytes']}** ({gib:.2f} GiB)\n\n")
-              o.write('| # | Archive path | MiB |\n|---:|---|---:|\n')
-              for i,a in enumerate(apps,1):
-                  o.write(f"| {i} | `{a['name']}` | {a['size']/1024**2:.1f} |\n")
-          print(f"IPA_COUNT={len(apps)}")
-          print(f"TOTAL_BYTES={manifest['total_bytes']}")
-          print(f"TOTAL_GIB={gib:.2f}")
+          lines=[
+              '# Cartoon Network iOS archive', '',
+              f'- IPA files discovered: **{len(apps)}**',
+              f'- Total compressed IPA bytes: **{manifest["total_bytes"]}** ({gib:.2f} GiB)',
+              f'- Audit shards: **{shard_count}**', '',
+              '| # | Archive path | MiB |', '|---:|---|---:|',
+          ]
+          for i,a in enumerate(apps,1):
+              lines.append(f'| {i} | `{a["name"]}` | {a["size"]/1024**2:.1f} |')
+          (out/'summary.md').write_text('\n'.join(lines)+'\n')
+
+          with open(os.environ['GITHUB_OUTPUT'],'a') as gh:
+              gh.write(f'ipa_count={len(apps)}\n')
+              gh.write(f'shard_count={shard_count}\n')
+              gh.write('shards='+json.dumps(shards,separators=(',',':'))+'\n')
+          print(f'IPA_COUNT={len(apps)}')
+          print(f'TOTAL_GIB={gib:.2f}')
+          print(f'SHARD_COUNT={shard_count}')
           PY
-          cat out/summary.md
-      - uses: actions/upload-artifact@v4
+          cat cartoon-network-index/summary.md
+      - uses: actions/upload-artifact@v6
         with:
           name: cartoon-network-ipa-index
-          path: out
+          path: cartoon-network-index
+          retention-days: 90
+
+  audit:
+    name: Audit Cartoon Network shard ${{ matrix.shard }}
+    needs: discover
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.discover.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v6
+        with:
+          name: cartoon-network-ipa-index
+          path: cartoon-network-index
+      - name: Install Mach-O analyzer
+        run: python -m pip install 'lief==0.17.5'
+      - name: Download, verify and audit every IPA assigned to this shard
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p cartoon-network-output
+          python .github/scripts/audit-ipa-corpus.py \
+            --manifest cartoon-network-index/cartoon-network-ipas.json \
+            --shard-index '${{ matrix.shard }}' \
+            --shard-count '${{ needs.discover.outputs.shard_count }}' \
+            --output 'cartoon-network-output/shard-${{ matrix.shard }}.json'
+      - name: Upload per-IPA audit records
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cartoon-network-audit-shard-${{ matrix.shard }}
+          path: cartoon-network-output/*.json
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    name: Require full archive coverage and aggregate compatibility data
+    if: always()
+    needs: [discover, audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          name: cartoon-network-ipa-index
+          path: cartoon-network-index
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: cartoon-network-audit-shard-*
+          path: cartoon-network-results
+          merge-multiple: true
+      - name: Aggregate and enforce exact full-corpus coverage
+        run: |
+          python .github/scripts/aggregate-cartoon-network-corpus.py \
+            --manifest cartoon-network-index/cartoon-network-ipas.json \
+            --results-glob 'cartoon-network-results/**/*.json'
+          cat cartoon-network-summary.md
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: cartoon-network-full-corpus-summary
+          path: |
+            cartoon-network-summary.json
+            cartoon-network-summary.md
+          if-no-files-found: error
           retention-days: 90
