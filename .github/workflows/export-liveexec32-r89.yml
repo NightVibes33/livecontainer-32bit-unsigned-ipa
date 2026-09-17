@@ -1,0 +1,62 @@
+name: Export LiveExec32 r89 Runtime
+
+on:
+  push:
+    branches: [temp/export-liveexec32-r89]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: macos-26
+    env:
+      LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+      LIVEEXEC32_LOAD_PATH: Frameworks/LiveExec32Shared.framework/LiveExec32Shared
+      LIVEEXEC32_ENTRY_SYMBOL: LC32RunGuest
+      LIVEEXEC32_BUILD_REVISION: '89'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact LiveExec32 package cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/liveexec-package
+          key: lc32-export-probe-${{ runner.os }}-${{ env.LIVEEXEC32_SHA }}
+          restore-keys: |
+            lc32-package-v1-${{ runner.os }}-${{ env.LIVEEXEC32_SHA }}-
+      - name: Validate cached runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "matched=${{ steps.cache.outputs.cache-matched-key }}"
+          test -n "${{ steps.cache.outputs.cache-matched-key }}"
+          LIVEEXEC_APP="$(find build/liveexec-package/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)"
+          test -n "$LIVEEXEC_APP"
+          test -f "$LIVEEXEC_APP/LiveExec32"
+          test -f "$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH"
+          test -d "$LIVEEXEC_APP/RootFS"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libstdc++.6.dylib"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libiconv.2.dylib"
+          test -f "$LIVEEXEC_APP/RootFS/usr/lib/libcharset.1.dylib"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitTranslationLayer' "$LIVEEXEC_APP/Info.plist")" = true
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledSourceCommit' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_SHA"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_LOAD_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_ENTRY_SYMBOL"
+          nm -gU "$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH" | grep -q '_LC32RunGuest'
+          rm -rf build/export
+          mkdir -p build/export
+          ditto "$LIVEEXEC_APP" build/export/LiveExec32.app
+          (cd build/export && zip -qry ../LiveExec32-r89.zip LiveExec32.app)
+          shasum -a 256 build/LiveExec32-r89.zip | tee build/LiveExec32-r89.sha256
+      - name: Upload exact runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiveExec32-r89
+          path: |
+            build/LiveExec32-r89.zip
+            build/LiveExec32-r89.sha256
+          compression-level: 0
+          if-no-files-found: error
