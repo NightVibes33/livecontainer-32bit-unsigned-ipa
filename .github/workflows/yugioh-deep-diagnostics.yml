@@ -66,15 +66,17 @@ jobs:
                   nxt = symbols[i+1][0] if i+1 < len(symbols) else addr + 0x800
                   if nxt <= addr: nxt = addr + 0x800
                   matches.append((addr, min(nxt, addr+0x1800), name))
-          # Keep this focused but broad enough to cover all network/sync and representative duel paths.
           matches = matches[:180]
           with open(out_path,'w') as out:
               out.write(f'Matched symbols: {len(matches)}\n')
               for addr,end,name in matches:
                   out.write(f'\n===== 0x{addr:08x}-0x{end:08x} {name} =====\n')
                   try:
+                      # Yugioh's text symbols are Thumb/Thumb-2. Forcing the
+                      # triple avoids decoding 16/32-bit Thumb opcodes as ARM.
                       p=subprocess.run([
                           'llvm-objdump','-d','--demangle',
+                          '--triple=thumbv7-apple-ios',
                           f'--start-address=0x{addr:x}', f'--stop-address=0x{end:x}',
                           binary
                       ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
