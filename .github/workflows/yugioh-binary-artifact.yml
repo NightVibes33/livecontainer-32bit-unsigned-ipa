@@ -1,0 +1,44 @@
+name: YuGiOh executable reference dump
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/workflows/yugioh-binary-artifact.yml'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download and extract executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.request
+          url='https://archive.org/download/yu-gi-oh-duel-generation/Yu-Gi-Oh%20Duel%20Generation.ipa'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req, timeout=120) as r, open('/tmp/yugioh.ipa','wb') as f:
+              while True:
+                  b=r.read(1024*1024)
+                  if not b: break
+                  f.write(b)
+          PY
+          rm -rf /tmp/ygo && mkdir -p /tmp/ygo
+          unzip -q /tmp/yugioh.ipa 'Payload/Yugioh.app/Yugioh' 'Payload/Yugioh.app/Info.plist' -d /tmp/ygo
+          cp /tmp/ygo/Payload/Yugioh.app/Yugioh "$RUNNER_TEMP/Yugioh"
+          cp /tmp/ygo/Payload/Yugioh.app/Info.plist "$RUNNER_TEMP/Info.plist"
+          sha256sum "$RUNNER_TEMP/Yugioh"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: yugioh-armv7-executable
+          path: |
+            ${{ runner.temp }}/Yugioh
+            ${{ runner.temp }}/Info.plist
+          if-no-files-found: error
+          retention-days: 2
