@@ -45,7 +45,8 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :LCBundledBuildRevision' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_BUILD_REVISION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorLoadPath' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_LOAD_PATH"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LC32BitEmulatorEntrySymbol' "$LIVEEXEC_APP/Info.plist")" = "$LIVEEXEC32_ENTRY_SYMBOL"
-          nm -gU "$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH" | grep -q '_LC32RunGuest'
+          nm -gU "$LIVEEXEC_APP/$LIVEEXEC32_LOAD_PATH" > "$RUNNER_TEMP/liveexec32.symbols"
+          grep -q '_LC32RunGuest' "$RUNNER_TEMP/liveexec32.symbols"
           rm -rf build/export
           mkdir -p build/export
           ditto "$LIVEEXEC_APP" build/export/LiveExec32.app
