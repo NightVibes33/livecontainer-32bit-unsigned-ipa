@@ -11,6 +11,7 @@ on:
       - '.github/scripts/patch-liveexec32-audiotoolbox-corpus.py'
       - '.github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py'
       - '.github/scripts/patch-liveexec32-legacy-extra-audiotoolbox.py'
+      - '.github/scripts/normalize-liveexec32-audiotoolbox-opcodes.py'
       - '.github/scripts/check-ipa-import-contract.py'
       - '.github/scripts/check-legacy-extra-corpus.py'
       - 'compat/legacy-extra-corpus-20260916.json'
@@ -100,6 +101,7 @@ jobs:
           python3 .github/scripts/patch-liveexec32-audiotoolbox-corpus.py
           python3 .github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py
           python3 .github/scripts/patch-liveexec32-legacy-extra-audiotoolbox.py
+          python3 .github/scripts/normalize-liveexec32-audiotoolbox-opcodes.py
           grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
           grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
           grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
