@@ -79,10 +79,10 @@ jobs:
           python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
           python3 .github/scripts/patch-liveexec32-quartzcore.py
           python3 .github/scripts/patch-liveexec32-target-coregraphics.py
+          # host-argument invokes patch-liveexec32-universal-canvas.py internally.
           python3 .github/scripts/patch-liveexec32-host-argument.py
           python3 .github/scripts/patch-liveexec32-openal-session.py
           python3 .github/scripts/patch-liveexec32-noexecute-diagnostics.py
-          python3 .github/scripts/patch-liveexec32-universal-canvas.py
           grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
           grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
           grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
