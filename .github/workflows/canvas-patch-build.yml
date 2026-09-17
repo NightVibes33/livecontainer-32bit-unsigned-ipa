@@ -6,18 +6,21 @@ on:
       - diag-yugioh-freeze-20260916
     paths:
       - '.github/scripts/patch-liveexec32-universal-canvas.py'
+      - '.github/scripts/check-ipa-import-contract.py'
       - '.github/workflows/canvas-patch-build.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 100
     env:
       LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+      CN_CORPUS_RUN_ID: '35177939615'
     steps:
       - name: Checkout integration repo
         uses: actions/checkout@v7
@@ -64,22 +67,114 @@ jobs:
           unzip -q "$pzb_archive" -d "$pzb_root"
           install -m 0755 "$pzb_root/buildroot_macos-latest/usr/local/bin/pzb" "$tools_dir/pzb"
           echo "$tools_dir" >> "$GITHUB_PATH"
-      - name: Apply generic legacy-canvas patch
+      - name: Generate upstream guest shims
+        run: gmake -C build/LiveExec32/GuestMakefile generate-shims
+      - name: Apply production compatibility patches plus generic legacy canvas
+        shell: bash
         run: |
           set -euxo pipefail
+          python3 .github/scripts/patch-liveexec32-missing-images.py
+          python3 .github/scripts/patch-liveexec32-accelerate.py
+          python3 .github/scripts/patch-liveexec32-coremedia.py
+          python3 .github/scripts/patch-liveexec32-corpus-object-constants.py
+          python3 .github/scripts/patch-liveexec32-quartzcore.py
+          python3 .github/scripts/patch-liveexec32-target-coregraphics.py
+          python3 .github/scripts/patch-liveexec32-host-argument.py
+          python3 .github/scripts/patch-liveexec32-openal-session.py
+          python3 .github/scripts/patch-liveexec32-noexecute-diagnostics.py
           python3 .github/scripts/patch-liveexec32-universal-canvas.py
           grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
           grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
           grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
-      - name: Generate guest shims
-        run: gmake -C build/LiveExec32/GuestMakefile generate-shims
-      - name: Build guest frameworks
-        run: gmake -C build/LiveExec32/GuestMakefile
-      - name: Assemble guest root filesystem
-        run: bash build/LiveExec32/GuestMakefile/pack-ramdisk.sh
+      - name: Build guest frameworks and assemble RootFS
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gmake -C build/LiveExec32/GuestMakefile
+          (cd build/LiveExec32 && bash GuestMakefile/pack-ramdisk.sh)
+
+          root=build/LiveExec32/Resources/RootFS
+          for framework in CoreSurface GraphicsServices PlugInKit WebKit; do
+            source="$root/System/Library/Frameworks/$framework.framework"
+            destination="$root/System/Library/PrivateFrameworks/$framework.framework"
+            if [ ! -f "$source/$framework" ]; then
+              echo "Runtime does not provide $framework yet; import coverage will report it"
+              continue
+            fi
+            mkdir -p "$destination"
+            cp "$source/$framework" "$destination/$framework"
+            cp "$source/Info.plist" "$destination/Info.plist"
+            chmod 0755 "$destination/$framework"
+          done
+          cp "$root/System/Library/Frameworks/LC32.framework/LC32" "$root/usr/lib/libresolv.9.dylib"
+          chmod 0755 "$root/usr/lib/libresolv.9.dylib"
+          bash .github/scripts/build-guest-libiconv.sh "$root"
       - name: Build patched LiveExec32 IPA
         run: gmake -C build/LiveExec32 package
+      - name: Extract packaged RootFS
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ipa=$(find build/LiveExec32/packages -maxdepth 1 -type f -name '*.ipa' -print -quit)
+          test -n "$ipa"
+          rm -rf build/packaged-runtime
+          mkdir -p build/packaged-runtime
+          unzip -q "$ipa" -d build/packaged-runtime
+          app=$(find build/packaged-runtime/Payload -maxdepth 1 -type d -name 'LiveExec32.app' -print -quit)
+          test -n "$app"
+          test -d "$app/RootFS"
+          echo "PACKAGED_ROOTFS=$app/RootFS" >> "$GITHUB_ENV"
+      - name: Download exact 51-IPA Cartoon Network contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf build/cn-contract
+          mkdir -p build/cn-contract
+          gh run download "$CN_CORPUS_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name cartoon-network-full-corpus-summary \
+            --dir build/cn-contract
+          test -f build/cn-contract/cartoon-network-import-contract.json
+          python3 - <<'PY'
+          import json
+          p='build/cn-contract/cartoon-network-import-contract.json'
+          c=json.load(open(p))
+          assert c['schema']==3
+          assert c['app_id_field']=='archive_name'
+          assert c['app_count']==51
+          assert len(c['apps'])==51
+          assert c['unresolved_binding_count']==0
+          assert sum(x.get('image_count',0) for x in c['apps'].values())==51
+          print('CN contract verified: 51 exact archive versions / 51 ARM32 images')
+          PY
+      - name: Audit all 51 Cartoon Network imports against packaged RootFS
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 .github/scripts/check-ipa-import-contract.py \
+            --contract build/cn-contract/cartoon-network-import-contract.json \
+            --rootfs "$PACKAGED_ROOTFS" \
+            --json-output build/cartoon-network-import-coverage.json \
+            --markdown-output build/cartoon-network-import-coverage.md \
+            --expected-app-count 51 \
+            --expected-image-count 51 \
+            --title 'LiveExec32 Cartoon Network 51-IPA import coverage' \
+            --allow-gaps
+          cat build/cartoon-network-import-coverage.md
+      - name: Upload CN compatibility coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: LiveExec32-Cartoon-Network-51-import-coverage
+          path: |
+            build/cartoon-network-import-coverage.json
+            build/cartoon-network-import-coverage.md
+          if-no-files-found: warn
+          retention-days: 90
       - name: Upload patched runtime
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: LiveExec32-generic-legacy-canvas
