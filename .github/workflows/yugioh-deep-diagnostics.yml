@@ -1,0 +1,107 @@
+name: YuGiOh deep freeze diagnostics
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/workflows/yugioh-deep-diagnostics.yml'
+  workflow_dispatch:
+
+jobs:
+  deep-inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm file unzip
+
+      - name: Download IPA
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.request
+          url='https://archive.org/download/yu-gi-oh-duel-generation/Yu-Gi-Oh%20Duel%20Generation.ipa'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req, timeout=120) as r, open('/tmp/yugioh.ipa','wb') as f:
+              while True:
+                  b=r.read(1024*1024)
+                  if not b: break
+                  f.write(b)
+          PY
+          rm -rf /tmp/yugioh && mkdir -p /tmp/yugioh
+          unzip -q /tmp/yugioh.ipa -d /tmp/yugioh
+          sha256sum /tmp/yugioh.ipa
+
+      - name: Trace likely freeze code paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP=$(find /tmp/yugioh/Payload -maxdepth 1 -type d -name '*.app' | head -n1)
+          BIN="$APP/Yugioh"
+          OUT="$RUNNER_TEMP/yugioh-deep-freeze-report.txt"
+          RAW="$RUNNER_TEMP/yugioh-symbols-raw.txt"
+          DEM="$RUNNER_TEMP/yugioh-symbols-demangled.txt"
+          llvm-nm -n "$BIN" > "$RAW" || true
+          llvm-nm -n -C "$BIN" > "$DEM" || true
+
+          python3 - "$BIN" "$DEM" "$OUT" <<'PY'
+          import re, subprocess, sys
+          binary, symbols_path, out_path = sys.argv[1:]
+          keywords = re.compile(
+              r'(CCHttpClient|CURLRaii|SocketIO|SocketRocket|Server::|Networking|'
+              r'dispatch_(group|semaphore|sync|async)|pthread_(join|cond|mutex)|'
+              r'SimpleAudioEngine|CDAudio|OpenAL|AVAudio|GameScene|DuelEngine|'
+              r'FieldLayer|Battle|ready_timeout|Timeout|timeout)', re.I)
+          symbols=[]
+          for line in open(symbols_path, errors='replace'):
+              m=re.match(r'^([0-9a-fA-F]+)\s+([A-Za-z?])\s+(.*)$', line.rstrip())
+              if not m: continue
+              symbols.append((int(m.group(1),16), m.group(3)))
+          matches=[]
+          for i,(addr,name) in enumerate(symbols):
+              if keywords.search(name):
+                  nxt = symbols[i+1][0] if i+1 < len(symbols) else addr + 0x800
+                  if nxt <= addr: nxt = addr + 0x800
+                  matches.append((addr, min(nxt, addr+0x1800), name))
+          # Keep this focused but broad enough to cover all network/sync and representative duel paths.
+          matches = matches[:180]
+          with open(out_path,'w') as out:
+              out.write(f'Matched symbols: {len(matches)}\n')
+              for addr,end,name in matches:
+                  out.write(f'\n===== 0x{addr:08x}-0x{end:08x} {name} =====\n')
+                  try:
+                      p=subprocess.run([
+                          'llvm-objdump','-d','--demangle',
+                          f'--start-address=0x{addr:x}', f'--stop-address=0x{end:x}',
+                          binary
+                      ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, timeout=20)
+                      out.write(p.stdout)
+                  except Exception as e:
+                      out.write(f'[disassembly failed: {e}]\n')
+          PY
+
+          {
+            echo '=== IMPORTANT SYMBOLS ==='
+            grep -Ei 'CCHttpClient|CURLRaii|SocketIO|SocketRocket|Server::|Networking|dispatch_(group|semaphore|sync|async)|pthread_(join|cond|mutex)|SimpleAudioEngine|CDAudio|OpenAL|AVAudio|GameScene|DuelEngine|FieldLayer|Battle|ready_timeout|Timeout|timeout' "$DEM" | head -n 1200 || true
+            echo
+            echo '=== NETWORK/HANG STRINGS WITH FILE OFFSETS ==='
+            strings -a -t x "$BIN" | grep -Ei 'elasticbeanstalk|socket\.io|ready_timeout|heartbeatTimeout|timeout|Start Server Connection|onError|disconnected|CCHttpClient|pthread|semaphore|deadlock|OpenAL|Audio' | head -n 1200 || true
+          } >> "$OUT"
+
+          gzip -c "$DEM" > "$RUNNER_TEMP/yugioh-symbols-demangled.txt.gz"
+          wc -l "$OUT"
+          tail -n 120 "$OUT"
+
+      - name: Upload deep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yugioh-deep-freeze-diagnostics
+          path: |
+            ${{ runner.temp }}/yugioh-deep-freeze-report.txt
+            ${{ runner.temp }}/yugioh-symbols-demangled.txt.gz
+          if-no-files-found: error
