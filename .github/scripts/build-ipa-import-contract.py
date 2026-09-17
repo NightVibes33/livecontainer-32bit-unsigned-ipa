@@ -10,6 +10,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reports", nargs="+", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--app-id-field",
+        choices=("bundle_id", "archive_name"),
+        default="bundle_id",
+        help=(
+            "Field used as the unique contract key. bundle_id preserves the legacy "
+            "corpus behavior; archive_name keeps multiple versions sharing one bundle ID distinct."
+        ),
+    )
     args = parser.parse_args()
     apps = []
     for report in args.reports:
@@ -22,7 +31,14 @@ def main():
         raise SystemExit(f"refusing incomplete reports: {len(failed)} failures")
     unique = {}
     for app in apps:
-        app_id = app.get("bundle_id") or app.get("archive_name")
+        app_id = app.get(args.app_id_field)
+        if not app_id and args.app_id_field == "bundle_id":
+            app_id = app.get("archive_name")
+        if not app_id:
+            raise SystemExit(
+                f"app missing requested id field {args.app_id_field}: "
+                f"{app.get('archive_name') or app.get('bundle_id') or '<unknown>'}"
+            )
         if app_id in unique:
             raise SystemExit(f"duplicate app id: {app_id}")
         images = app.get("images") or [{
@@ -38,7 +54,6 @@ def main():
             libs = image["libraries"]
             all_libraries.update(x["name"] for x in libs)
             image_imports = defaultdict(lambda: {"required": set(), "weak": set()})
-            image_exports = set(image.get("exports", []))
             self_bindings = {"required": set(), "weak": set()}
             symbol_table_only = 0
             for symbol in image["imports"]:
@@ -80,6 +95,8 @@ def main():
                 "symbol_table_only_count": symbol_table_only,
             }
         unique[app_id] = {
+            "bundle_id": app.get("bundle_id"),
+            "archive_name": app.get("archive_name"),
             "minimum_os": app.get("minimum_os"),
             "markers": sorted(app.get("markers", [])),
             "image_count": len(images),
@@ -95,13 +112,16 @@ def main():
         len(app["unresolved_bindings"]) for app in unique.values())
     output = {
         "schema": 3,
+        "app_id_field": args.app_id_field,
         "app_count": len(unique),
         "unresolved_binding_count": unresolved_count,
         "apps": {key: unique[key] for key in sorted(unique)},
     }
     Path(args.output).write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
-    print(f"wrote {len(unique)} apps to {args.output}; "
-          f"unresolved_bindings={unresolved_count}")
+    print(
+        f"wrote {len(unique)} apps to {args.output}; "
+        f"id_field={args.app_id_field} unresolved_bindings={unresolved_count}"
+    )
     if unresolved_count:
         raise SystemExit("contract contains unresolved Mach-O bindings")
 
