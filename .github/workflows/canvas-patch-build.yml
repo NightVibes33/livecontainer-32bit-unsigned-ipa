@@ -1,4 +1,4 @@
-name: Build generic legacy-canvas LiveExec32
+name: Build 53-app legacy compatibility LiveExec32
 
 on:
   push:
@@ -7,9 +7,12 @@ on:
     paths:
       - '.github/scripts/patch-liveexec32-universal-canvas.py'
       - '.github/scripts/patch-liveexec32-cartoon-network-imports.py'
+      - '.github/scripts/patch-liveexec32-audiotoolbox-corpus.py'
       - '.github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py'
+      - '.github/scripts/patch-liveexec32-legacy-extra-audiotoolbox.py'
       - '.github/scripts/check-ipa-import-contract.py'
-      - 'compat/legacy-app-import-contracts.json'
+      - '.github/scripts/check-legacy-extra-corpus.py'
+      - 'compat/legacy-extra-corpus-20260916.json'
       - '.github/workflows/canvas-patch-build.yml'
   workflow_dispatch:
 
@@ -27,6 +30,7 @@ jobs:
     steps:
       - name: Checkout integration repo
         uses: actions/checkout@v7
+
       - name: Checkout pinned LiveExec32
         uses: actions/checkout@v7
         with:
@@ -35,12 +39,14 @@ jobs:
           path: build/LiveExec32
           submodules: recursive
           persist-credentials: false
+
       - name: Restore extracted guest ramdisk
         id: ramdisk-cache
         uses: actions/cache/restore@v6
         with:
           path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
           key: lc32-ramdisk-v1-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
+
       - name: Install LiveExec32 build dependencies
         shell: bash
         run: |
@@ -70,9 +76,11 @@ jobs:
           unzip -q "$pzb_archive" -d "$pzb_root"
           install -m 0755 "$pzb_root/buildroot_macos-latest/usr/local/bin/pzb" "$tools_dir/pzb"
           echo "$tools_dir" >> "$GITHUB_PATH"
+
       - name: Generate upstream guest shims
         run: gmake -C build/LiveExec32/GuestMakefile generate-shims
-      - name: Apply production compatibility patches plus generic legacy canvas
+
+      - name: Apply production compatibility patches plus 53-app legacy coverage
         shell: bash
         run: |
           set -euxo pipefail
@@ -87,12 +95,16 @@ jobs:
           python3 .github/scripts/patch-liveexec32-openal-session.py
           python3 .github/scripts/patch-liveexec32-noexecute-diagnostics.py
           python3 .github/scripts/patch-liveexec32-cartoon-network-imports.py
+          python3 .github/scripts/patch-liveexec32-audiotoolbox-corpus.py
           python3 .github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py
+          python3 .github/scripts/patch-liveexec32-legacy-extra-audiotoolbox.py
           grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
           grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
           grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
+          grep -q 'AudioServicesPlayAlertSound' build/LiveExec32/GuestFrameworks/AudioToolbox/AudioToolbox.m
           test -f build/LiveExec32/GuestFrameworks/MediaToolbox/MediaToolbox.m
           test -f build/LiveExec32/GuestFrameworks/MediaToolbox/LC32MTAudioProcessingTapCompat.m
+
       - name: Build guest frameworks and assemble RootFS
         shell: bash
         run: |
@@ -116,8 +128,10 @@ jobs:
           cp "$root/System/Library/Frameworks/LC32.framework/LC32" "$root/usr/lib/libresolv.9.dylib"
           chmod 0755 "$root/usr/lib/libresolv.9.dylib"
           bash .github/scripts/build-guest-libiconv.sh "$root"
+
       - name: Build patched LiveExec32 IPA
         run: gmake -C build/LiveExec32 package
+
       - name: Extract packaged RootFS
         shell: bash
         run: |
@@ -131,6 +145,7 @@ jobs:
           test -n "$app"
           test -d "$app/RootFS"
           echo "PACKAGED_ROOTFS=$app/RootFS" >> "$GITHUB_ENV"
+
       - name: Download exact 51-IPA Cartoon Network contract
         env:
           GH_TOKEN: ${{ github.token }}
@@ -156,6 +171,7 @@ jobs:
           assert sum(x.get('image_count',0) for x in c['apps'].values())==51
           print('CN contract verified: 51 exact archive versions / 51 ARM32 images')
           PY
+
       - name: Audit all 51 Cartoon Network imports against packaged RootFS
         shell: bash
         run: |
@@ -169,16 +185,40 @@ jobs:
             --expected-image-count 51 \
             --title 'LiveExec32 Cartoon Network 51-IPA import coverage'
           cat build/cartoon-network-import-coverage.md
-      - name: Upload CN compatibility coverage
+
+      - name: Gate Kick the Boss and Gravity Falls and assemble 53-app report
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 .github/scripts/check-legacy-extra-corpus.py \
+            --metadata compat/legacy-extra-corpus-20260916.json \
+            --cn-coverage build/cartoon-network-import-coverage.json \
+            --rootfs "$PACKAGED_ROOTFS" \
+            --json-output build/legacy-53-compatibility.json \
+            --markdown-output build/legacy-53-compatibility.md
+          cat build/legacy-53-compatibility.md
+          python3 - <<'PY'
+          import json
+          r=json.load(open('build/legacy-53-compatibility.json'))
+          assert r['status']=='pass'
+          assert r['app_count']==53
+          assert r['arm32_image_count']==53
+          print('Combined gate verified: exactly 53 legacy apps / 53 ARM32 images')
+          PY
+
+      - name: Upload 53-app compatibility coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: LiveExec32-Cartoon-Network-51-import-coverage
+          name: LiveExec32-legacy-53-app-compatibility
           path: |
             build/cartoon-network-import-coverage.json
             build/cartoon-network-import-coverage.md
+            build/legacy-53-compatibility.json
+            build/legacy-53-compatibility.md
           if-no-files-found: warn
           retention-days: 90
+
       - name: Upload patched runtime
         if: always()
         uses: actions/upload-artifact@v4
