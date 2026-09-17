@@ -42,61 +42,88 @@ jobs:
           APP=$(find /tmp/yugioh/Payload -maxdepth 1 -type d -name '*.app' | head -n1)
           BIN="$APP/Yugioh"
           OUT="$RUNNER_TEMP/yugioh-deep-freeze-report.txt"
-          RAW="$RUNNER_TEMP/yugioh-symbols-raw.txt"
           DEM="$RUNNER_TEMP/yugioh-symbols-demangled.txt"
-          llvm-nm -n "$BIN" > "$RAW" || true
+          DIS="$RUNNER_TEMP/yugioh-thumb-disassembly.txt"
           llvm-nm -n -C "$BIN" > "$DEM" || true
 
-          python3 - "$BIN" "$DEM" "$OUT" <<'PY'
-          import re, subprocess, sys
-          binary, symbols_path, out_path = sys.argv[1:]
+          # The game is Thumb/Thumb-2. Decode the entire text once so calls to
+          # libpthread, libdispatch, curl, CFNetwork and OpenAL can be mapped
+          # back to their caller functions rather than inferred from strings.
+          llvm-objdump -d --demangle --triple=thumbv7-apple-ios "$BIN" > "$DIS" 2>&1 || true
+
+          python3 - "$BIN" "$DEM" "$DIS" "$OUT" <<'PY'
+          import collections, re, subprocess, sys
+          binary, symbols_path, dis_path, out_path = sys.argv[1:]
           keywords = re.compile(
               r'(CCHttpClient|CURLRaii|SocketIO|SocketRocket|Server::|Networking|'
-              r'dispatch_(group|semaphore|sync|async)|pthread_(join|cond|mutex)|'
               r'SimpleAudioEngine|CDAudio|OpenAL|AVAudio|GameScene|DuelEngine|'
               r'FieldLayer|Battle|ready_timeout|Timeout|timeout)', re.I)
+          targets = re.compile(
+              r'<(_?pthread_(?:cond_wait|join|mutex_lock)|'
+              r'_?dispatch_(?:group_wait|semaphore_wait|sync)|'
+              r'_?curl_easy_perform|_?NSURLConnection|'
+              r'_?alSourcePlay|_?alcMakeContextCurrent|_?AudioFileReadBytes|'
+              r'_?ExtAudioFileRead)[^>]*>')
+
           symbols=[]
           for line in open(symbols_path, errors='replace'):
               m=re.match(r'^([0-9a-fA-F]+)\s+([A-Za-z?])\s+(.*)$', line.rstrip())
-              if not m: continue
-              symbols.append((int(m.group(1),16), m.group(3)))
-          matches=[]
-          for i,(addr,name) in enumerate(symbols):
-              if keywords.search(name):
-                  nxt = symbols[i+1][0] if i+1 < len(symbols) else addr + 0x800
-                  if nxt <= addr: nxt = addr + 0x800
-                  matches.append((addr, min(nxt, addr+0x1800), name))
-          matches = matches[:180]
+              if m:
+                  symbols.append((int(m.group(1),16), m.group(3)))
+
           with open(out_path,'w') as out:
-              out.write(f'Matched symbols: {len(matches)}\n')
-              for addr,end,name in matches:
+              out.write('=== BLOCKING IMPORT CALL SITES ===\n')
+              current='(unknown)'
+              ring=collections.deque(maxlen=14)
+              hits=0
+              for line in open(dis_path, errors='replace'):
+                  header=re.match(r'^([0-9a-fA-F]+) <(.+)>:$', line.rstrip())
+                  if header:
+                      current=header.group(2)
+                      ring.clear()
+                  m=targets.search(line)
+                  if m:
+                      hits += 1
+                      out.write(f'\n--- caller: {current}  target: {m.group(1)} ---\n')
+                      for prev in ring: out.write(prev)
+                      out.write(line)
+                  ring.append(line)
+              out.write(f'\nblocking call-site hits: {hits}\n')
+
+              out.write('\n=== SELECTED SYMBOL DISASSEMBLY ===\n')
+              matches=[]
+              for i,(addr,name) in enumerate(symbols):
+                  if keywords.search(name):
+                      nxt=symbols[i+1][0] if i+1 < len(symbols) else addr+0x800
+                      if nxt <= addr: nxt=addr+0x800
+                      matches.append((addr,min(nxt,addr+0x1000),name))
+              for addr,end,name in matches[:120]:
                   out.write(f'\n===== 0x{addr:08x}-0x{end:08x} {name} =====\n')
                   try:
-                      # Yugioh's text symbols are Thumb/Thumb-2. Forcing the
-                      # triple avoids decoding 16/32-bit Thumb opcodes as ARM.
                       p=subprocess.run([
                           'llvm-objdump','-d','--demangle',
                           '--triple=thumbv7-apple-ios',
-                          f'--start-address=0x{addr:x}', f'--stop-address=0x{end:x}',
-                          binary
-                      ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True, timeout=20)
+                          f'--start-address=0x{addr:x}',f'--stop-address=0x{end:x}',
+                          binary], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, timeout=15)
                       out.write(p.stdout)
                   except Exception as e:
                       out.write(f'[disassembly failed: {e}]\n')
+
+              out.write('\n=== IMPORTANT SYMBOLS ===\n')
+              for line in open(symbols_path, errors='replace'):
+                  if keywords.search(line): out.write(line)
           PY
 
           {
-            echo '=== IMPORTANT SYMBOLS ==='
-            grep -Ei 'CCHttpClient|CURLRaii|SocketIO|SocketRocket|Server::|Networking|dispatch_(group|semaphore|sync|async)|pthread_(join|cond|mutex)|SimpleAudioEngine|CDAudio|OpenAL|AVAudio|GameScene|DuelEngine|FieldLayer|Battle|ready_timeout|Timeout|timeout' "$DEM" | head -n 1200 || true
             echo
             echo '=== NETWORK/HANG STRINGS WITH FILE OFFSETS ==='
-            strings -a -t x "$BIN" | grep -Ei 'elasticbeanstalk|socket\.io|ready_timeout|heartbeatTimeout|timeout|Start Server Connection|onError|disconnected|CCHttpClient|pthread|semaphore|deadlock|OpenAL|Audio' | head -n 1200 || true
+            strings -a -t x "$BIN" | grep -Ei 'elasticbeanstalk|socket\.io|ready_timeout|heartbeatTimeout|timeout|Start Server Connection|onError|disconnected|CCHttpClient|pthread|semaphore|deadlock|OpenAL|Audio' | head -n 1600 || true
           } >> "$OUT"
 
           gzip -c "$DEM" > "$RUNNER_TEMP/yugioh-symbols-demangled.txt.gz"
           wc -l "$OUT"
-          tail -n 120 "$OUT"
+          sed -n '1,260p' "$OUT"
 
       - name: Upload deep report
         if: always()
