@@ -6,6 +6,7 @@ media.parent.mkdir(parents=True, exist_ok=True)
 media.write_text(r'''
 #include <stdint.h>
 #include <stddef.h>
+#include <MacTypes.h>
 
 /*
  * Old Unity players use MediaToolbox's audio-processing tap as an optional
@@ -14,7 +15,6 @@ media.write_text(r'''
  * invalid tap. Callers can then retain their unprocessed audio path.
  */
 typedef void *MTAudioProcessingTapRef;
-typedef int32_t OSStatus;
 typedef uint32_t MTAudioProcessingTapCreationFlags;
 typedef uint32_t MTAudioProcessingTapFlags;
 typedef int32_t CMItemCount;
