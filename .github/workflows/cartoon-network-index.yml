@@ -2,13 +2,6 @@ name: Audit every Cartoon Network iOS archive IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - diag-yugioh-freeze-20260916
-    paths:
-      - '.github/workflows/cartoon-network-index.yml'
-      - '.github/scripts/audit-ipa-corpus.py'
-      - '.github/scripts/aggregate-cartoon-network-corpus.py'
 
 permissions:
   contents: read
@@ -66,8 +59,6 @@ jobs:
           out=Path('cartoon-network-index')
           (out/'cartoon-network-ipas.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
 
-          # Use the full discovered corpus. Jobs are sharded only to keep each
-          # runner bounded; no title/name allowlist exists anywhere in the path.
           shard_count=min(24,len(apps))
           shards=list(range(shard_count))
           gib=manifest['total_bytes']/1024**3
