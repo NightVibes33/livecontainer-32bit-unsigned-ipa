@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
+
 p = Path("build/LiveExec32/HostFrameworks/LC32/dynarmic_callbacks.cpp")
 s = p.read_text()
 old = r'''        } else {
@@ -42,6 +44,16 @@ new = r'''        } else {
             DumpCrashReport(signal);
         }
 '''
-if old not in s: raise SystemExit("no-execute diagnostic anchor missing")
+if old not in s:
+    raise SystemExit("no-execute diagnostic anchor missing")
 p.write_text(s.replace(old, new, 1))
 print("LC32: installed no-execute object/vtable crash diagnostics")
+
+# Temp-branch-only Yu-Gi-Oh gameplay hang instrumentation. The normal
+# unsigned workflow already calls this script, so chaining here keeps the
+# production workflow unchanged while making workflow_dispatch at this ref
+# build the instrumented runtime.
+runpy.run_path(
+    ".github/scripts/patch-liveexec32-yugioh-hang.py",
+    run_name="__main__",
+)
