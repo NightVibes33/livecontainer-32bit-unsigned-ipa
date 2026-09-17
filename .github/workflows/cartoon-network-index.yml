@@ -2,6 +2,14 @@ name: Audit every Cartoon Network iOS archive IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/workflows/cartoon-network-index.yml'
+      - '.github/scripts/audit-ipa-corpus.py'
+      - '.github/scripts/aggregate-cartoon-network-corpus.py'
+      - '.github/scripts/build-ipa-import-contract.py'
 
 permissions:
   contents: read
@@ -59,6 +67,8 @@ jobs:
           out=Path('cartoon-network-index')
           (out/'cartoon-network-ipas.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
 
+          # Use every discovered IPA. Sharding bounds runner work only; there
+          # is deliberately no title, version or bundle-id allowlist.
           shard_count=min(24,len(apps))
           shards=list(range(shard_count))
           gib=manifest['total_bytes']/1024**3
@@ -128,11 +138,11 @@ jobs:
           retention-days: 90
 
   aggregate:
-    name: Require full archive coverage and aggregate compatibility data
+    name: Require full archive coverage and build exact import contract
     if: always()
     needs: [discover, audit]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v6
@@ -146,10 +156,31 @@ jobs:
           merge-multiple: true
       - name: Aggregate and enforce exact full-corpus coverage
         run: |
+          set -euxo pipefail
           python .github/scripts/aggregate-cartoon-network-corpus.py \
             --manifest cartoon-network-index/cartoon-network-ipas.json \
             --results-glob 'cartoon-network-results/**/*.json'
           cat cartoon-network-summary.md
+      - name: Build exact-version Mach-O import contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python .github/scripts/build-ipa-import-contract.py \
+            --reports cartoon-network-summary.json \
+            --output cartoon-network-import-contract.json \
+            --app-id-field archive_name
+          python3 - <<'PY'
+          import json, os
+          contract=json.load(open('cartoon-network-import-contract.json'))
+          expected=int('${{ needs.discover.outputs.ipa_count }}')
+          assert contract['app_count'] == expected, (contract['app_count'], expected)
+          assert len(contract['apps']) == expected
+          assert contract['unresolved_binding_count'] == 0
+          assert contract.get('app_id_field') == 'archive_name'
+          images=sum(x.get('image_count',0) for x in contract['apps'].values())
+          print(f'CN_CONTRACT_APPS={expected}')
+          print(f'CN_CONTRACT_IMAGES={images}')
+          PY
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -157,5 +188,6 @@ jobs:
           path: |
             cartoon-network-summary.json
             cartoon-network-summary.md
+            cartoon-network-import-contract.json
           if-no-files-found: error
           retention-days: 90
