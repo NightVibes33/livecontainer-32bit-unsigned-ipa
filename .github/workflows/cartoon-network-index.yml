@@ -1,0 +1,71 @@
+name: Index Cartoon Network iOS archive
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/workflows/cartoon-network-index.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Build complete IPA manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python3 - <<'PY'
+          import json, urllib.request
+          identifier='cartoon-network-ios-archive'
+          req=urllib.request.Request(
+              f'https://archive.org/metadata/{identifier}',
+              headers={'User-Agent':'LiveExec32-CN-index/1'})
+          with urllib.request.urlopen(req, timeout=120) as r:
+              meta=json.load(r)
+          apps=[]
+          for f in meta.get('files',[]):
+              name=f.get('name','')
+              if not name.lower().endswith('.ipa'):
+                  continue
+              apps.append({
+                  'name':name,
+                  'size':int(f.get('size') or 0),
+                  'md5':f.get('md5'),
+                  'sha1':f.get('sha1'),
+              })
+          apps.sort(key=lambda x:x['name'].lower())
+          manifest={
+              'identifier':identifier,
+              'source':f'https://archive.org/download/{identifier}',
+              'ipa_count':len(apps),
+              'total_bytes':sum(x['size'] for x in apps),
+              'apps':apps,
+          }
+          with open('out/cartoon-network-ipas.json','w') as o:
+              json.dump(manifest,o,indent=2,sort_keys=True)
+              o.write('\n')
+          gib=manifest['total_bytes']/1024**3
+          with open('out/summary.md','w') as o:
+              o.write(f"# Cartoon Network iOS archive\n\n")
+              o.write(f"- IPA files: **{len(apps)}**\n")
+              o.write(f"- Total compressed IPA bytes: **{manifest['total_bytes']}** ({gib:.2f} GiB)\n\n")
+              o.write('| # | Archive path | MiB |\n|---:|---|---:|\n')
+              for i,a in enumerate(apps,1):
+                  o.write(f"| {i} | `{a['name']}` | {a['size']/1024**2:.1f} |\n")
+          print(f"IPA_COUNT={len(apps)}")
+          print(f"TOTAL_BYTES={manifest['total_bytes']}")
+          print(f"TOTAL_GIB={gib:.2f}")
+          PY
+          cat out/summary.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cartoon-network-ipa-index
+          path: out
+          retention-days: 90
