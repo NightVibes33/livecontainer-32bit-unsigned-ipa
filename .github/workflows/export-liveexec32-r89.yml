@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   export:
@@ -60,3 +60,18 @@ jobs:
             build/LiveExec32-r89.sha256
           compression-level: 0
           if-no-files-found: error
+      - name: Publish pinned runtime release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: liveexec32-r89
+          name: LiveExec32 Runtime r89
+          prerelease: true
+          target_commitish: temp/export-liveexec32-r89
+          files: |
+            build/LiveExec32-r89.zip
+            build/LiveExec32-r89.sha256
+          body: |
+            Validated LiveExec32 translation runtime used by the 32-bit LiveContainer integration.
+            Source commit: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+            Build revision: 89
+            Entry symbol: LC32RunGuest
