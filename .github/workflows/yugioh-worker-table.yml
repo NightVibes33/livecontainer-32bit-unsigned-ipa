@@ -1,0 +1,85 @@
+name: YuGiOh worker freeze table
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/workflows/yugioh-worker-table.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect-workers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm unzip
+
+      - name: Download and resolve worker callbacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import urllib.request
+          url='https://archive.org/download/yu-gi-oh-duel-generation/Yu-Gi-Oh%20Duel%20Generation.ipa'
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+          with urllib.request.urlopen(req, timeout=120) as r, open('/tmp/yugioh.ipa','wb') as f:
+              while True:
+                  b=r.read(1024*1024)
+                  if not b: break
+                  f.write(b)
+          PY
+          rm -rf /tmp/yugioh && mkdir -p /tmp/yugioh
+          unzip -q /tmp/yugioh.ipa -d /tmp/yugioh
+          APP=$(find /tmp/yugioh/Payload -maxdepth 1 -type d -name '*.app' | head -n1)
+          BIN="$APP/Yugioh"
+          OUT="$RUNNER_TEMP/yugioh-worker-table.txt"
+          SYM="$RUNNER_TEMP/yugioh-worker-symbols.txt"
+          llvm-nm -n -C "$BIN" > "$SYM" || true
+
+          python3 - "$BIN" "$SYM" "$OUT" <<'PY'
+          import bisect, re, struct, subprocess, sys
+          binary, symfile, outpath = sys.argv[1:]
+          syms=[]
+          for line in open(symfile, errors='replace'):
+              m=re.match(r'^([0-9a-fA-F]+)\s+([A-Za-z?])\s+(.*)$', line.rstrip())
+              if m: syms.append((int(m.group(1),16),m.group(3)))
+          addrs=[a for a,_ in syms]
+          # From LC_SEGMENT: __DATA vmaddr 0x00940000, fileoff 0x0093c000.
+          # Worker 0x25e8f4 loads callbacks from absolute guest VA 0x009d5114.
+          table_va=0x009d5114
+          table_off=0x0093c000 + (table_va-0x00940000)
+          data=open(binary,'rb').read()
+          callbacks=struct.unpack_from('<16I',data,table_off)
+          with open(outpath,'w') as out:
+              out.write(f'worker_table_va=0x{table_va:08x} file_off=0x{table_off:08x}\n')
+              out.write('16 callbacks loaded by worker at 0x0025e8f4:\n')
+              for i,p in enumerate(callbacks):
+                  code=p & ~1
+                  pos=bisect.bisect_right(addrs,code)-1
+                  near=syms[pos] if pos>=0 else (0,'?')
+                  out.write(f'[{i:02d}] raw=0x{p:08x} code=0x{code:08x} nearest=0x{near[0]:08x} {near[1]} +0x{code-near[0]:x}\n')
+                  if 0xa1a0 <= code < 0x8926e4:
+                      q=subprocess.run(['llvm-objdump','-d','--demangle','--triple=thumbv7-apple-ios',
+                          f'--start-address=0x{code:x}',f'--stop-address=0x{code+0x180:x}',binary],
+                          stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+                      out.write(q.stdout)
+                      out.write('\n')
+              out.write('\nRaw 256 bytes around table:\n')
+              chunk=data[max(0,table_off-64):table_off+192]
+              for off in range(0,len(chunk),16):
+                  row=chunk[off:off+16]
+                  out.write(f'{table_off-64+off:08x}: '+row.hex(' ')+'\n')
+          PY
+
+          cat "$OUT"
+
+      - name: Upload worker analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: yugioh-worker-freeze-analysis
+          path: ${{ runner.temp }}/yugioh-worker-table.txt
+          if-no-files-found: error
