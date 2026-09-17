@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-path = Path("build/LiveExec32/GuestFrameworks/MediaToolbox/LC32MTAudioProcessingTapCompat.m")
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(r'''
+media = Path("build/LiveExec32/GuestFrameworks/MediaToolbox/LC32MTAudioProcessingTapCompat.m")
+media.parent.mkdir(parents=True, exist_ok=True)
+media.write_text(r'''
 #include <stdint.h>
 #include <stddef.h>
 
@@ -53,4 +53,22 @@ OSStatus MTAudioProcessingTapGetSourceAudio(
 }
 ''')
 
-print("installed MediaToolbox MTAudioProcessingTap compatibility exports")
+audio = Path("build/LiveExec32/GuestFrameworks/AudioToolbox/LC32LegacyAlertSoundCompat.m")
+audio.parent.mkdir(parents=True, exist_ok=True)
+audio.write_text(r'''
+#include <stdint.h>
+
+typedef uint32_t SystemSoundID;
+
+extern void AudioServicesPlaySystemSound(SystemSoundID inSystemSoundID);
+
+/* Legacy alert sound uses the same guest system-sound transport. The host
+ * runtime cannot reproduce the historical alert/vibrate policy exactly, but
+ * routing the sound ID through the implemented system-sound path preserves
+ * the app-visible audio behavior instead of silently dropping the call. */
+void AudioServicesPlayAlertSound(SystemSoundID inSystemSoundID) {
+    AudioServicesPlaySystemSound(inSystemSoundID);
+}
+''')
+
+print("installed MediaToolbox tap and legacy AudioServices alert compatibility exports")
