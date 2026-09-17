@@ -18,113 +18,131 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm file unzip jq
 
-      - name: Resolve and download Beemo and Regular Arcade
+      - name: Download exact Cartoon Network archive builds
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, re, urllib.request, urllib.parse
+          import json, urllib.request, urllib.parse
 
+          IDENTIFIER='cartoon-network-ios-archive'
           UA={'User-Agent':'Mozilla/5.0'}
-          def meta(identifier):
-              req=urllib.request.Request('https://archive.org/metadata/'+identifier, headers=UA)
-              with urllib.request.urlopen(req, timeout=120) as r:
-                  return json.load(r)
-          def download(identifier, name, dest):
-              url='https://archive.org/download/{}/{}'.format(identifier, urllib.parse.quote(name, safe='/()[]!$&\'*,;=:@-_.~'))
-              print('DOWNLOAD', url)
+          req=urllib.request.Request('https://archive.org/metadata/'+IDENTIFIER, headers=UA)
+          with urllib.request.urlopen(req, timeout=120) as r:
+              meta=json.load(r)
+          names=[f.get('name','') for f in meta.get('files',[])]
+
+          targets={
+              'beemo': 'Adventure Time/Beemo v2.2.5 (IOS 5.0+).ipa',
+              'regular-arcade': 'Regular Show/Just a Regular Arcade v3.4.0 (IOS 9.0+).ipa',
+          }
+          for label, wanted in targets.items():
+              if wanted not in names:
+                  matches=[n for n in names if n.lower().endswith('.ipa') and (
+                      ('beemo' in n.lower() and '2.2.5' in n) if label == 'beemo'
+                      else ('regular arcade' in n.lower() and '3.4.0' in n)
+                  )]
+                  raise SystemExit(f'{wanted!r} missing; matches={matches}')
+              url='https://archive.org/download/{}/{}'.format(
+                  IDENTIFIER, urllib.parse.quote(wanted, safe='/()[]!$&\'*,;=:@-_.~'))
+              dest=f'/tmp/{label}.ipa'
+              print('DOWNLOAD', label, url)
               req=urllib.request.Request(url, headers=UA)
-              with urllib.request.urlopen(req, timeout=180) as r, open(dest,'wb') as f:
+              with urllib.request.urlopen(req, timeout=240) as r, open(dest,'wb') as f:
                   while True:
                       b=r.read(1024*1024)
                       if not b: break
                       f.write(b)
-
-          bm=meta('beemo-2.2.5')
-          beemo=[f['name'] for f in bm.get('files',[]) if f.get('name','').lower().endswith('.ipa')]
-          print('BEEMO_IPAS=', beemo)
-          if not beemo:
-              raise SystemExit('No Beemo IPA found')
-          # Prefer the unmodified base dump; inspect hack variant separately if present.
-          base=next((n for n in beemo if 'hack' not in n.lower()), beemo[0])
-          download('beemo-2.2.5', base, '/tmp/beemo.ipa')
-          hacks=[n for n in beemo if 'hack' in n.lower()]
-          if hacks:
-              download('beemo-2.2.5', hacks[0], '/tmp/beemo-hack.ipa')
-
-          rm=meta('ios7pluscollection')
-          regular=[f['name'] for f in rm.get('files',[]) if 'Just A Regular Arcade (v3.4)' in f.get('name','') and f.get('name','').lower().endswith('.ipa')]
-          print('REGULAR_ARCADE_IPAS=', regular)
-          if not regular:
-              # Some Archive.org items store the file directly without a .ipa suffix in metadata.
-              regular=[f['name'] for f in rm.get('files',[]) if 'Just A Regular Arcade (v3.4)' in f.get('name','')]
-              print('REGULAR_ARCADE_MATCHES=', regular)
-          if not regular:
-              raise SystemExit('No Just A Regular Arcade v3.4 file found')
-          download('ios7pluscollection', regular[0], '/tmp/regular-arcade.ipa')
+              print(label, 'bytes', __import__('os').path.getsize(dest))
 
           with open('/tmp/archive-files.txt','w') as f:
-              f.write('Beemo base: '+base+'\n')
-              for n in hacks: f.write('Beemo hack: '+n+'\n')
-              for n in regular: f.write('Regular Arcade: '+n+'\n')
+              for label, wanted in targets.items():
+                  f.write(f'{label}: {wanted}\n')
           PY
           sha256sum /tmp/beemo.ipa /tmp/regular-arcade.ipa | tee /tmp/ipa-sha256.txt
-          if [ -f /tmp/beemo-hack.ipa ]; then sha256sum /tmp/beemo-hack.ipa | tee -a /tmp/ipa-sha256.txt; fi
 
-      - name: Inspect app binaries
+      - name: Inspect exact Beemo 2.2.5
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/reports"
-          inspect_ipa() {
-            LABEL="$1"; IPA="$2"; ROOT="/tmp/$LABEL"
-            rm -rf "$ROOT" && mkdir -p "$ROOT"
-            unzip -q "$IPA" -d "$ROOT"
-            APP=$(find "$ROOT/Payload" -maxdepth 1 -type d -name '*.app' | head -n1)
-            if [ -z "$APP" ]; then echo "No .app in $IPA"; return 1; fi
-            EXE=$(python3 - "$APP/Info.plist" <<'PY'
+          REPORT="$RUNNER_TEMP/reports"
+          mkdir -p "$REPORT" /tmp/beemo225
+          unzip -q /tmp/beemo.ipa -d /tmp/beemo225
+          APP=$(find /tmp/beemo225/Payload -maxdepth 1 -type d -name '*.app' -print -quit)
+          EXE=$(python3 - "$APP/Info.plist" <<'PY'
           import plistlib,sys
           with open(sys.argv[1],'rb') as f: print(plistlib.load(f)['CFBundleExecutable'])
           PY
-            )
-            BIN="$APP/$EXE"
-            OUT="$RUNNER_TEMP/reports/$LABEL.txt"
-            PLIST="$RUNNER_TEMP/reports/$LABEL-info.txt"
-            python3 - "$APP/Info.plist" > "$PLIST" <<'PY'
+          )
+          BIN="$APP/$EXE"
+          {
+            echo '=== FILE ==='; file "$BIN"
+            echo '=== PLIST ==='
+            python3 - "$APP/Info.plist" <<'PY'
           import plistlib,pprint,sys
           with open(sys.argv[1],'rb') as f: pprint.pp(plistlib.load(f), sort_dicts=True)
           PY
-            {
-              echo "=== LABEL ==="; echo "$LABEL"
-              echo "=== APP ==="; echo "$APP"
-              echo "=== EXECUTABLE ==="; echo "$EXE"; file "$BIN"
-              echo "=== INFO.PLIST ==="; cat "$PLIST"
-              echo "=== MACH-O LOAD COMMANDS ==="; llvm-objdump --macho --private-headers "$BIN" || true
-              echo "=== LINKED DYLIBS ==="; llvm-objdump --macho --dylibs-used "$BIN" || true
-              echo "=== UNDEFINED IMPORTS ==="; llvm-nm -u "$BIN" 2>/dev/null | sed -n '1,10000p' || true
-              echo "=== OBJC / ENGINE / GEOMETRY / FREEZE STRINGS ==="
-              strings -a "$BIN" | grep -Ei 'UIScreen|UIWindow|bounds|applicationFrame|nativeBounds|nativeScale|statusBar|orientation|EAGL|OpenGL|glViewport|renderbuffer|framebuffer|CADisplayLink|Cocos|Unity|Mono|FMOD|OpenAL|Audio|pthread|dispatch|semaphore|mutex|condition|join|CFNetwork|NSURLConnection|NSURLSession|socket|curl|GameKit|StoreKit|GAD|AdMob|Flurry|credit|credits|loading|timeout|deadlock|error|assert' | sed -n '1,12000p' || true
-              echo "=== URL STRINGS ==="
-              strings -a "$BIN" | grep -Eio 'https?://[^[:space:]"<>]+' | sort -u | sed -n '1,3000p' || true
-              echo "=== IMAGE DIMENSIONS / LAUNCH ASSETS ==="
-              find "$APP" -maxdepth 5 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print0 | while IFS= read -r -d '' f; do
-                file "$f" || true
-              done | grep -Ei 'launch|default|splash|320 x 480|480 x 320|640 x 960|960 x 640|640 x 1136|1136 x 640|768 x 1024|1024 x 768' | sed -n '1,4000p' || true
-              echo "=== LARGE FILES ==="
-              find "$APP" -type f -print0 | xargs -0 du -k | sort -nr | head -n 250 || true
-            } > "$OUT" 2>&1
-          }
+            echo '=== MACH-O ==='; llvm-objdump --macho --private-headers "$BIN" || true
+            echo '=== DYLIBS ==='; llvm-objdump --macho --dylibs-used "$BIN" || true
+            echo '=== IMPORTS ==='; llvm-nm -u "$BIN" 2>/dev/null || true
+            echo '=== APP TREE ==='; find "$APP" -maxdepth 4 -type f -printf '%P\n' | sort
+            echo '=== CORDOVA / WEB SIGNALS ==='
+            strings -a "$BIN" | grep -Ei 'Cordova|PhoneGap|UIWebView|WKWebView|webView|deviceready|LowLatencyAudio|AdMob|GAD|Flurry|credits?|splash|viewport|orientation|statusBar' || true
+            echo '=== WEB FILE MATCHES ==='
+            find "$APP" -type f \( -iname '*.html' -o -iname '*.htm' -o -iname '*.js' -o -iname '*.css' -o -iname '*.json' \) -print | sort
+            echo '=== CREDITS / STARTUP / VIEWPORT SOURCE MATCHES ==='
+            grep -RInaE --include='*.html' --include='*.htm' --include='*.js' --include='*.css' --include='*.json' \
+              'credit|credits|deviceready|setTimeout|setInterval|splash|viewport|device-width|innerWidth|innerHeight|screen\.|orientation|resize|location\.href|window\.location|ajax|XMLHttpRequest|https?://' "$APP" 2>/dev/null | head -n 12000 || true
+            echo '=== IMAGE DIMENSIONS ==='
+            find "$APP" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print0 | while IFS= read -r -d '' f; do file "$f" || true; done | head -n 5000
+          } > "$REPORT/beemo-2.2.5.txt" 2>&1
+          cp "$APP/Info.plist" "$REPORT/beemo-Info.plist"
 
-          inspect_ipa beemo /tmp/beemo.ipa
-          if [ -f /tmp/beemo-hack.ipa ]; then inspect_ipa beemo-hack /tmp/beemo-hack.ipa; fi
-          inspect_ipa regular-arcade /tmp/regular-arcade.ipa
-          cp /tmp/archive-files.txt "$RUNNER_TEMP/reports/"
-          cp /tmp/ipa-sha256.txt "$RUNNER_TEMP/reports/"
+      - name: Inspect exact Regular Arcade 3.4.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/reports"
+          mkdir -p "$REPORT" /tmp/regular340
+          unzip -q /tmp/regular-arcade.ipa -d /tmp/regular340
+          APP=$(find /tmp/regular340/Payload -maxdepth 1 -type d -name '*.app' -print -quit)
+          EXE=$(python3 - "$APP/Info.plist" <<'PY'
+          import plistlib,sys
+          with open(sys.argv[1],'rb') as f: print(plistlib.load(f)['CFBundleExecutable'])
+          PY
+          )
+          BIN="$APP/$EXE"
+          {
+            echo '=== FILE ==='; file "$BIN"
+            echo '=== PLIST ==='
+            python3 - "$APP/Info.plist" <<'PY'
+          import plistlib,pprint,sys
+          with open(sys.argv[1],'rb') as f: pprint.pp(plistlib.load(f), sort_dicts=True)
+          PY
+            echo '=== MACH-O ==='; llvm-objdump --macho --private-headers "$BIN" || true
+            echo '=== DYLIBS ==='; llvm-objdump --macho --dylibs-used "$BIN" || true
+            echo '=== IMPORTS ==='; llvm-nm -u "$BIN" 2>/dev/null || true
+            echo '=== UNITY / RENDER / THREAD SIGNALS ==='
+            strings -a "$BIN" | grep -Ei 'Unity|il2cpp|mono|Metal|OpenGLES|EAGL|glViewport|CVOpenGLES|display|screen|render|pthread|dispatch_(group|semaphore|sync)|Audio|OpenAL|crash|assert|error|timeout' | head -n 12000 || true
+            echo '=== UNITY DATA TREE ==='
+            find "$APP" -maxdepth 5 -type f -printf '%P\n' | grep -Ei '(^|/)(Data|Managed|Frameworks|Unity|globalgamemanagers|mainData|level|sharedassets|resources)' | head -n 12000 || true
+          } > "$REPORT/regular-arcade-3.4.0.txt" 2>&1
+          cp "$APP/Info.plist" "$REPORT/regular-arcade-Info.plist"
 
-          echo '=== BEEMO SIGNALS ==='
-          grep -E 'CFBundle|MinimumOSVersion|UIDeviceFamily|UISupportedInterfaceOrientations|Mach-O|sdk |version |LC_VERSION|OpenGLES|OpenAL|Audio|pthread|dispatch|UIScreen|UIWindow|glViewport|renderbuffer|credit|GAD|AdMob|Flurry' "$RUNNER_TEMP/reports/beemo.txt" | head -n 900 || true
-          echo '=== REGULAR ARCADE SIGNALS ==='
-          grep -E 'CFBundle|MinimumOSVersion|UIDeviceFamily|UISupportedInterfaceOrientations|Mach-O|sdk |version |LC_VERSION|OpenGLES|OpenAL|Audio|pthread|dispatch|UIScreen|UIWindow|glViewport|renderbuffer|Unity|Cocos|GAD|AdMob|Flurry' "$RUNNER_TEMP/reports/regular-arcade.txt" | head -n 900 || true
+      - name: Emit compatibility summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/reports"
+          cp /tmp/archive-files.txt "$REPORT/"
+          cp /tmp/ipa-sha256.txt "$REPORT/"
+          {
+            echo '=== BEEMO SUMMARY ==='
+            grep -E 'CFBundleShortVersionString|MinimumOSVersion|UIDeviceFamily|UISupportedInterfaceOrientations|sdk |version |Cordova|PhoneGap|UIWebView|WKWebView|deviceready|credit|viewport|device-width|innerWidth|innerHeight|orientation|LowLatencyAudio' "$REPORT/beemo-2.2.5.txt" | head -n 1200 || true
+            echo
+            echo '=== REGULAR ARCADE SUMMARY ==='
+            grep -E 'CFBundleShortVersionString|MinimumOSVersion|UIDeviceFamily|UISupportedInterfaceOrientations|sdk |version |Mach-O universal|armv7|arm64|Unity|Metal|OpenGLES|EAGL|CVOpenGLES|dispatch_group_wait|dispatch_semaphore_wait|pthread_join' "$REPORT/regular-arcade-3.4.0.txt" | head -n 1600 || true
+          } | tee "$REPORT/summary.txt"
 
       - name: Upload reports
         if: always()
