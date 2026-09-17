@@ -9,6 +9,7 @@ on:
       - '.github/scripts/patch-liveexec32-cartoon-network-imports.py'
       - '.github/scripts/patch-liveexec32-mediatoolbox-audio-processing.py'
       - '.github/scripts/check-ipa-import-contract.py'
+      - 'compat/legacy-app-import-contracts.json'
       - '.github/workflows/canvas-patch-build.yml'
   workflow_dispatch:
 
