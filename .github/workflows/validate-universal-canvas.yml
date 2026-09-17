@@ -1,0 +1,79 @@
+name: Validate universal 32-bit legacy canvas
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/scripts/patch-liveexec32-universal-canvas.py'
+      - '.github/scripts/patch-liveexec32-host-argument.py'
+      - '.github/workflows/validate-universal-canvas.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+    steps:
+      - uses: actions/checkout@v6
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+      - name: Checkout pinned LiveExec32
+        uses: actions/checkout@v6
+        with:
+          repository: LiveContainer/LiveExec32
+          ref: ${{ env.LIVEEXEC32_SHA }}
+          path: build/LiveExec32
+          submodules: recursive
+          persist-credentials: false
+      - name: Apply compatibility patch chain
+        run: |
+          set -euxo pipefail
+          python3 .github/scripts/patch-liveexec32-host-argument.py
+          grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
+          grep -q 'LC32BundleSupportsLegacyIPadCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
+          grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
+          grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
+          grep -q 'LC32LegacyPhoneCanvasHeight' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
+      - name: Install host build dependencies
+        run: |
+          set -euxo pipefail
+          brew install make boost ldid
+          THEOS="$RUNNER_TEMP/theos"
+          THEOS_COMMIT=5280bd038207e14f8bd76f5417aa2fe641c03228
+          git init "$THEOS"
+          git -C "$THEOS" remote add origin https://github.com/theos/theos.git
+          git -C "$THEOS" fetch --depth 1 origin "$THEOS_COMMIT"
+          git -C "$THEOS" checkout --detach FETCH_HEAD
+          git -C "$THEOS" submodule update --init --recursive --depth 1
+          SDK_ARCHIVE="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+          curl --fail --location --retry 3 --output "$SDK_ARCHIVE" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo '5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  '"$SDK_ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$THEOS/sdks"
+          tar -xJf "$SDK_ARCHIVE" -C "$THEOS/sdks"
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+      - name: Compile patched host framework
+        run: |
+          set -euxo pipefail
+          gmake -C build/LiveExec32/HostFrameworks/LC32 all \
+            THEOS_PROJECT_DIR="$GITHUB_WORKSPACE/build/LiveExec32/HostFrameworks/LC32" \
+            THEOS_CURRENT_INSTANCE= _THEOS_CURRENT_TYPE= \
+            _THEOS_CURRENT_OPERATION= THEOS_CURRENT_ARCH=
+          test -d build/LiveExec32/HostFrameworks/LC32/.theos/obj/LiveExec32Shared.framework
+      - name: Archive patched sources
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: universal-canvas-patched-sources
+          path: |
+            build/LiveExec32/include/LC32LegacyCanvas.h
+            build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
+            build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
+          retention-days: 14
