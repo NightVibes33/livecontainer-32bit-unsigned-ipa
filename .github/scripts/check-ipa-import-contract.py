@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a packaged LiveExec32 RootFS with the complete 40-app import contract."""
+"""Compare a packaged LiveExec32 RootFS with an exhaustive IPA import contract."""
 import argparse
 import json
 import re
@@ -31,7 +31,8 @@ def macho_reexports(path):
         for candidate in output[index + 1:index + 8]:
             match = re.match(r"\s*name\s+(\S+)\s+\(offset", candidate)
             if match:
-                found.add(match.group(1)); break
+                found.add(match.group(1))
+                break
     return found
 
 
@@ -41,15 +42,26 @@ def main():
     parser.add_argument("--rootfs", required=True)
     parser.add_argument("--json-output", required=True)
     parser.add_argument("--markdown-output", required=True)
+    parser.add_argument("--expected-app-count", type=int, default=40)
+    parser.add_argument("--expected-image-count", type=int, default=68)
+    parser.add_argument("--title", default="LiveExec32 IPA import coverage")
     parser.add_argument("--allow-gaps", action="store_true")
     args = parser.parse_args()
+
     contract = json.loads(Path(args.contract).read_text())
     if contract.get("schema") != 3:
         raise SystemExit("contract must use exhaustive binding schema 3")
-    if contract.get("app_count") != 40 or len(contract.get("apps", {})) != 40:
-        raise SystemExit("contract must contain exactly 40 unique apps")
+
+    apps = contract.get("apps", {})
+    app_count = contract.get("app_count")
+    if app_count != args.expected_app_count or len(apps) != args.expected_app_count:
+        raise SystemExit(
+            f"contract must contain exactly {args.expected_app_count} unique apps; "
+            f"declared={app_count} actual={len(apps)}"
+        )
+
     unresolved_bindings = [
-        item for app in contract["apps"].values()
+        item for app in apps.values()
         for item in app.get("unresolved_bindings", [])
     ]
     if contract.get("unresolved_binding_count") != len(unresolved_bindings):
@@ -57,27 +69,31 @@ def main():
     if unresolved_bindings:
         raise SystemExit(
             f"contract contains {len(unresolved_bindings)} unresolved bindings")
-    image_count = sum(app.get("image_count", 0)
-                      for app in contract["apps"].values())
-    if image_count != 68:
-        raise SystemExit(f"contract must contain exactly 68 ARM32 images, got {image_count}")
+
+    image_count = sum(app.get("image_count", 0) for app in apps.values())
+    if image_count != args.expected_image_count:
+        raise SystemExit(
+            f"contract must contain exactly {args.expected_image_count} ARM32 images, got {image_count}"
+        )
+
     self_binding_count = sum(
         len(symbols)
-        for app in contract["apps"].values()
+        for app in apps.values()
         for image in app.get("images", {}).values()
         for symbols in image.get("self_bindings", {}).values()
     )
     symbol_table_only_count = sum(
         image.get("symbol_table_only_count", 0)
-        for app in contract["apps"].values()
+        for app in apps.values()
         for image in app.get("images", {}).values()
     )
+
     root = Path(args.rootfs)
     required_by_library = defaultdict(set)
     weak_by_library = defaultdict(set)
     apps_by_requirement = defaultdict(set)
     all_libraries = set()
-    for app_id, app in contract["apps"].items():
+    for app_id, app in apps.items():
         all_libraries.update(x for x in app["libraries"] if x.startswith("/"))
         for library, groups in app["imports"].items():
             if not library.startswith("/"):
@@ -86,9 +102,10 @@ def main():
                 required_by_library[library].add(symbol)
                 apps_by_requirement[(library, symbol)].add(app_id)
             weak_by_library[library].update(groups["weak"])
-    exports = {}; reexports = {}; image_errors = {}
-    # Inspect the contract images, then recursively inspect every LC_REEXPORT_DYLIB
-    # target. Umbrellas such as libSystem.B contain almost no direct exports.
+
+    exports = {}
+    reexports = {}
+    image_errors = {}
     pending = list(sorted(all_libraries))
     inspected = set()
     while pending:
@@ -105,30 +122,43 @@ def main():
             pending.extend(sorted(reexports[library] - inspected))
         except Exception as exc:
             image_errors[library] = str(exc)
+
     def surface(library, seen=None):
         seen = set() if seen is None else seen
-        if library in seen: return set()
+        if library in seen:
+            return set()
         seen.add(library)
         value = set(exports.get(library, ()))
         for target in reexports.get(library, ()):
             value.update(surface(target, seen))
         return value
+
     missing_libraries = sorted(x for x in all_libraries if x not in exports)
     missing_required = []
     missing_weak = []
     for library, symbols in sorted(required_by_library.items()):
-        if library not in exports: continue
+        if library not in exports:
+            continue
         available = surface(library)
         for symbol in sorted(symbols - available):
-            missing_required.append({"library": library, "symbol": symbol, "apps": sorted(apps_by_requirement[(library, symbol)])})
+            missing_required.append({
+                "library": library,
+                "symbol": symbol,
+                "apps": sorted(apps_by_requirement[(library, symbol)]),
+            })
     for library, symbols in sorted(weak_by_library.items()):
-        if library not in exports: continue
+        if library not in exports:
+            continue
         available = surface(library)
         for symbol in sorted(symbols - available):
             missing_weak.append({"library": library, "symbol": symbol})
+
     report = {
-        "schema": 2, "contract_schema": contract["schema"],
-        "app_count": 40, "arm32_image_count": image_count,
+        "schema": 2,
+        "contract_schema": contract["schema"],
+        "contract_app_id_field": contract.get("app_id_field", "bundle_id"),
+        "app_count": app_count,
+        "arm32_image_count": image_count,
         "self_binding_count": self_binding_count,
         "symbol_table_only_count": symbol_table_only_count,
         "unresolved_binding_count": 0,
@@ -140,9 +170,13 @@ def main():
         "image_errors": image_errors,
     }
     Path(args.json_output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    lines = ["# LiveExec32 40-app import coverage", "",
+
+    lines = [
+        f"# {args.title}", "",
         "- Contract schema: 3 (exhaustive binding accounting)",
-        "- Apps: 40", f"- ARM32 Mach-O images: {image_count}",
+        f"- Contract key: `{contract.get('app_id_field', 'bundle_id')}`",
+        f"- Apps: {app_count}",
+        f"- ARM32 Mach-O images: {image_count}",
         f"- App-contained self bindings tracked: {self_binding_count}",
         f"- Symbol-table-only records tracked: {symbol_table_only_count}",
         "- Unresolved special/invalid bindings: 0",
@@ -150,13 +184,21 @@ def main():
         f"- Missing libraries: {len(missing_libraries)}",
         f"- Missing required exports: {len(missing_required)}",
         f"- Missing weak exports (tracked, not startup-fatal): {len(missing_weak)}",
-        f"- Image inspection errors: {len(image_errors)}", ""]
+        f"- Image inspection errors: {len(image_errors)}", "",
+    ]
     if missing_libraries:
         lines += ["## Missing libraries", ""] + [f"- `{x}`" for x in missing_libraries] + [""]
     if missing_required:
-        lines += ["## Missing required exports", ""] + [f"- `{x['symbol']}` from `{x['library']}` ({len(x['apps'])} app(s))" for x in missing_required] + [""]
+        lines += ["## Missing required exports", ""] + [
+            f"- `{x['symbol']}` from `{x['library']}` ({len(x['apps'])} app(s))"
+            for x in missing_required
+        ] + [""]
     Path(args.markdown_output).write_text("\n".join(lines))
-    print(f"libraries={len(all_libraries)} missing_libraries={len(missing_libraries)} missing_required={len(missing_required)} missing_weak={len(missing_weak)}")
+    print(
+        f"apps={app_count} images={image_count} libraries={len(all_libraries)} "
+        f"missing_libraries={len(missing_libraries)} "
+        f"missing_required={len(missing_required)} missing_weak={len(missing_weak)}"
+    )
     if not args.allow_gaps and (missing_libraries or missing_required or image_errors):
         raise SystemExit(1)
 
