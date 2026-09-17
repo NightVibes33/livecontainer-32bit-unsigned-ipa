@@ -1,0 +1,88 @@
+name: Build generic legacy-canvas LiveExec32
+
+on:
+  push:
+    branches:
+      - diag-yugioh-freeze-20260916
+    paths:
+      - '.github/scripts/patch-liveexec32-universal-canvas.py'
+      - '.github/workflows/canvas-patch-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      LIVEEXEC32_SHA: 3f0390e1b2725a2d3c9ab6f3976650a5a295ffba
+    steps:
+      - name: Checkout integration repo
+        uses: actions/checkout@v7
+      - name: Checkout pinned LiveExec32
+        uses: actions/checkout@v7
+        with:
+          repository: LiveContainer/LiveExec32
+          ref: ${{ env.LIVEEXEC32_SHA }}
+          path: build/LiveExec32
+          submodules: recursive
+          persist-credentials: false
+      - name: Restore extracted guest ramdisk
+        id: ramdisk-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/LiveExec32/tmp/ipsw/ramdisk.dmg
+          key: lc32-ramdisk-v1-3564d16366b053503107288be6cb335b2283cf14838ab64a88017c17a2a6a1bc
+      - name: Install LiveExec32 build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install make boost ldid
+          theos="$RUNNER_TEMP/theos"
+          theos_commit=5280bd038207e14f8bd76f5417aa2fe641c03228
+          git init "$theos"
+          git -C "$theos" remote add origin https://github.com/theos/theos.git
+          git -C "$theos" fetch --depth 1 origin "$theos_commit"
+          git -C "$theos" checkout --detach FETCH_HEAD
+          git -C "$theos" submodule update --init --recursive --depth 1
+          sdk_archive="$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz"
+          curl --fail --location --retry 3 --output "$sdk_archive" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo "5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  $sdk_archive" | shasum -a 256 -c -
+          mkdir -p "$theos/sdks"
+          tar -xJf "$sdk_archive" -C "$theos/sdks"
+          echo "THEOS=$theos" >> "$GITHUB_ENV"
+          pzb_archive="$RUNNER_TEMP/pzb.zip"
+          pzb_root="$RUNNER_TEMP/pzb"
+          tools_dir="$RUNNER_TEMP/lc32-tools"
+          curl --fail --location --retry 3 --output "$pzb_archive" \
+            https://github.com/tihmstar/partialZipBrowser/releases/download/44/buildroot_macos-latest.zip
+          echo "f72452e5c9c1248b8c4b4967a357b03addbe98d61ba8bad286ef0146dfdccdd2  $pzb_archive" | shasum -a 256 -c -
+          mkdir -p "$pzb_root" "$tools_dir"
+          unzip -q "$pzb_archive" -d "$pzb_root"
+          install -m 0755 "$pzb_root/buildroot_macos-latest/usr/local/bin/pzb" "$tools_dir/pzb"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+      - name: Apply generic legacy-canvas patch
+        run: |
+          set -euxo pipefail
+          python3 .github/scripts/patch-liveexec32-universal-canvas.py
+          grep -q 'LC32BundleSupportsLegacyPhoneCanvas' build/LiveExec32/include/LC32LegacyCanvas.h
+          grep -q 'LC32LegacyIPadGeometryModeReflowPhoneController' build/LiveExec32/HostFrameworks/UIKit/UIKit.mm
+          grep -q 'LC32ScreenNeedsLegacyPhoneCanvas' build/LiveExec32/GuestFrameworks/UIKit/UIKit.m
+      - name: Generate guest shims
+        run: gmake -C build/LiveExec32/GuestMakefile generate-shims
+      - name: Build guest frameworks
+        run: gmake -C build/LiveExec32/GuestMakefile
+      - name: Assemble guest root filesystem
+        run: bash build/LiveExec32/GuestMakefile/pack-ramdisk.sh
+      - name: Build patched LiveExec32 IPA
+        run: gmake -C build/LiveExec32 package
+      - name: Upload patched runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: LiveExec32-generic-legacy-canvas
+          path: build/LiveExec32/packages/*.ipa
+          if-no-files-found: error
+          retention-days: 30
