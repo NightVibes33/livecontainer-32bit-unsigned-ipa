@@ -31,6 +31,7 @@ def is_macho_member(archive, member):
 
 def describe_macho(path, relative_name):
     parsed=lief.MachO.parse(str(path))
+    bins=list(parsed) if hasattr(parsed,"__iter__") else [parsed]
     binary=choose_arm(parsed)
     if binary is None: return None
     imported=[]
@@ -48,8 +49,16 @@ def describe_macho(path, relative_name):
     # LIEF exposes both through binary.libraries, so retaining the ID here
     # would shift every embedded-dylib import by one framework.
     libraries=[x for x in commands if "ID_DYLIB" not in x["command"]]
+    slices=[]
+    for b in bins:
+        slices.append({
+            "cpu_type":str(b.header.cpu_type),
+            "cpu_subtype":str(getattr(b.header,"cpu_subtype","unknown")),
+        })
     return {
       "path":relative_name,"cpu_type":str(binary.header.cpu_type),
+      "cpu_subtype":str(getattr(binary.header,"cpu_subtype","unknown")),
+      "slices":slices,
       "file_type":str(binary.header.file_type),"pie":bool(binary.is_pie),
       "encrypted":bool(binary.has_encryption_info and binary.encryption_info.crypt_id),
       "install_name":install_names[0] if install_names else None,
@@ -70,14 +79,16 @@ def detect_markers(blob):
       "gamekit": [b"GKLocalPlayer"],
       "webkit": [b"UIWebView",b"WKWebView"],
       "corevideo": [b"CVPixelBuffer"],
+      "uikit_legacy": [b"UIAlertView",b"UIActionSheet",b"UIApplicationDelegate",b"UIWebView"],
+      "opengl_es1": [b"glOrthof",b"glMatrixMode",b"glVertexPointer",b"glTexCoordPointer"],
     }
     return sorted(k for k,needles in checks.items() if any(x in blob for x in needles))
 
 def audit(entry, base, work):
     name=entry["name"]; target=work/"app.ipa"
     url=base.rstrip("/")+"/"+urllib.parse.quote(name,safe="/")
-    req=urllib.request.Request(url,headers={"User-Agent":"LiveExec32-corpus-audit/1"})
-    with urllib.request.urlopen(req,timeout=120) as src,target.open("wb") as dst:
+    req=urllib.request.Request(url,headers={"User-Agent":"LiveExec32-corpus-audit/2"})
+    with urllib.request.urlopen(req,timeout=180) as src,target.open("wb") as dst:
         shutil.copyfileobj(src,dst,1024*1024)
     actual_size=target.stat().st_size
     if entry.get("size") and actual_size != entry["size"]:
@@ -96,6 +107,7 @@ def audit(entry, base, work):
         macho_infos=[i for i in infos if i.filename.startswith(app_root) and is_macho_member(z,i)]
         images=[]
         primary=None
+        exe_path=None
         for index,macho_info in enumerate(macho_infos):
             image_path=work/f"MachO-{index}"
             with z.open(macho_info) as src,image_path.open("wb") as dst:
@@ -108,13 +120,19 @@ def audit(entry, base, work):
             if macho_info.filename==executable:
                 primary=description
                 exe_path=image_path
-        if primary is None: raise ValueError("main executable Mach-O missing")
+        if primary is None or exe_path is None: raise ValueError("main executable 32-bit ARM Mach-O missing")
     raw=exe_path.read_bytes()
     return {
       "status":"ok","archive_name":name,"archive_url":url,"archive_size":actual_size,
       "bundle_id":info.get("CFBundleIdentifier"),"bundle_version":info.get("CFBundleVersion"),
       "short_version":info.get("CFBundleShortVersionString"),"minimum_os":info.get("MinimumOSVersion"),
+      "device_family":info.get("UIDeviceFamily"),
+      "required_device_capabilities":info.get("UIRequiredDeviceCapabilities"),
+      "supported_platforms":info.get("CFBundleSupportedPlatforms"),
+      "sdk_name":info.get("DTSDKName"),"platform_version":info.get("DTPlatformVersion"),
+      "xcode":info.get("DTXcode"),"xcode_build":info.get("DTXcodeBuild"),
       "executable":info.get("CFBundleExecutable"),"cpu_type":primary["cpu_type"],
+      "cpu_subtype":primary.get("cpu_subtype"),"slices":primary.get("slices",[]),
       "file_type":primary["file_type"],"pie":primary["pie"],"encrypted":primary["encrypted"],
       "libraries":primary["libraries"],"imports":primary["imports"],"images":images,
       "markers":detect_markers(raw),
